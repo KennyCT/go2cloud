@@ -50,3 +50,10 @@ export const UPLOAD_CHUNK_BYTES = 64 * 1024 * 1024;
  * trusting this. Non-final chunks must be an exact multiple; the final chunk is exempt.
  */
 export const DEFAULT_CHUNK_GRANULARITY = 262_144;
+
+export * from "./gopro/auth.js";
+export * from "./gopro/client.js";
+export * from "./gopro/errors.js";
+export * from "./gopro/selection.js";
+export * from "./gopro/types.js";
+export * from "./util/keychain.js";
