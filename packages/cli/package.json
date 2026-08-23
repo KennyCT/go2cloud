@@ -1,0 +1,21 @@
+{
+  "name": "go2cloud",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "go2cloud": "./dist/main.js" },
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@go2cloud/core": "workspace:*",
+    "commander": "^14.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.7.0",
+    "typescript": "^5.9.3"
+  }
+}

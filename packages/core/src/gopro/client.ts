@@ -22,12 +22,12 @@ export const SEARCH_FIELDS = [
 
 export interface SearchFilter {
   /** Capture-date window. Send an explicit end-of-day — a zero-width range returns 0. */
-  capturedFrom?: Date;
-  capturedTo?: Date;
+  capturedFrom?: Date | undefined;
+  capturedTo?: Date | undefined;
   /** Upload-date window. `created_range` is a real server-side filter (verified). */
-  createdFrom?: Date;
-  createdTo?: Date;
-  types?: string[];
+  createdFrom?: Date | undefined;
+  createdTo?: Date | undefined;
+  types?: string[] | undefined;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -38,8 +38,8 @@ function isoRange(from?: Date, to?: Date): string | null {
 }
 
 export interface ClientOptions {
-  maxRetries?: number;
-  onWarn?: (message: string) => void;
+  maxRetries?: number | undefined;
+  onWarn?: ((message: string) => void) | undefined;
 }
 
 export class GoProClient {

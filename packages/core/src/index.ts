@@ -51,10 +51,17 @@ export const UPLOAD_CHUNK_BYTES = 64 * 1024 * 1024;
  */
 export const DEFAULT_CHUNK_GRANULARITY = 262_144;
 
-export * from "./gopro/auth.js";
+// The two auth modules both expose loadTokens/saveTokens, so they are namespaced
+// rather than flattened — `goproAuth.loadTokens()` vs `googleAuth.loadTokens()`.
+export * as goproAuth from "./gopro/auth.js";
+export * as googleAuth from "./google/auth.js";
+
 export * from "./gopro/client.js";
 export * from "./gopro/errors.js";
 export * from "./gopro/selection.js";
 export * from "./gopro/types.js";
-export * from "./util/keychain.js";
+export * from "./google/client.js";
 export * from "./state/db.js";
+export * from "./transfer/engine.js";
+export * from "./transfer/mime.js";
+export * from "./util/keychain.js";
