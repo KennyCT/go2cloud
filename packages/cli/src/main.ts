@@ -359,10 +359,19 @@ withFilters(program.command("transfer").description("stream matching media into 
 
     let albumId: string | null = o.toAlbum ?? null;
     if (o.newAlbum) {
-      const album = await google.createAlbum(o.newAlbum);
-      store.rememberGoogleAlbum(album.id, album.title);
-      albumId = album.id;
-      out(`\n  Created album "${album.title}"`);
+      // Reuse an album of the same name rather than creating a duplicate: resuming a
+      // large run is the common case, and Google Photos cannot delete the surplus.
+      const existing = (await google.listAlbums()).find((a) => a.title === o.newAlbum && a.writeable);
+      if (existing) {
+        albumId = existing.id;
+        store.rememberGoogleAlbum(existing.id, existing.title);
+        out(`\n  Adding to existing album "${existing.title}" (${existing.itemCount} items already there)`);
+      } else {
+        const album = await google.createAlbum(o.newAlbum);
+        store.rememberGoogleAlbum(album.id, album.title);
+        albumId = album.id;
+        out(`\n  Created album "${album.title}"`);
+      }
     }
 
     const tasks = pending;

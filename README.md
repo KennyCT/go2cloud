@@ -1,6 +1,6 @@
 # go2cloud
 
-**Stream your GoPro Cloud footage straight into Google Photos — without filling up your disk.**
+**Move footage that's already in GoPro Cloud into Google Photos — streamed, never staged on disk.**
 
 [![Status](https://img.shields.io/badge/status-in%20development-orange)]()
 [![License](https://img.shields.io/badge/license-MIT-blue)]()
@@ -8,19 +8,28 @@
 
 ---
 
-## The problem
+## What this is for
 
-Getting GoPro footage into Google Photos normally goes like this:
+Your clips are already in GoPro Cloud — GoPro Premium's auto-upload puts them there in the
+background. Getting them into Google Photos normally means downloading gigabytes to your laptop,
+waiting, uploading the same bytes back, waiting again, then deleting the local copy.
 
-1. Download a 40 GB clip from GoPro Cloud to your laptop. Wait.
-2. Upload it to Google Photos. Wait again.
-3. Delete the local copy so your disk isn't full.
-4. Repeat. Forever.
+go2cloud collapses that into one streamed pass: **GoPro CDN → memory → Google Photos** in ~64 MB
+windows. The bytes still travel down and back up — no API on either side can avoid that — but
+they never touch disk, the two legs overlap instead of running one after the other, and the whole
+thing is unattended. It transfers files in parallel and resumes exactly where it left off after a
+crash, a closed laptop, or a dead Wi-Fi connection.
 
-go2cloud collapses steps 1–3 into a single streamed pass. Bytes flow **GoPro CDN → memory →
-Google Photos** in ~64 MB windows, so a 2 TB library transfers using near-zero disk. It runs
-unattended, transfers files in parallel, and resumes exactly where it left off after a crash,
-a closed laptop, or a dead Wi-Fi connection.
+| Use it when | Why |
+| --- | --- |
+| The footage is already in GoPro Cloud | The card has been wiped, reused, or isn't to hand. This is the main case. |
+| You have no card reader | No card slot, no USB-C adapter, no phone dongle. |
+| You're moving a lot at once | Date-range and album selection, resume after an interruption, and skipping already-transferred items on a re-run are all work you'd otherwise do by hand. |
+
+**Don't use it when the footage is still on the card and you have a reader.** Uploading straight
+from the card — with a card reader, a phone adapter, or the Google Photos desktop uploader —
+avoids the download leg entirely, so it's simpler and faster. go2cloud is for footage that now
+only lives in the cloud.
 
 ---
 
@@ -30,10 +39,11 @@ These are real constraints, not caveats we're working around. They come from wha
 Google Photos APIs actually permit — see [`docs/PLAN.md`](docs/PLAN.md) for the evidence.
 
 **This is not a true cloud-to-cloud transfer, because no such thing exists.** The Google Photos
-API has no import-from-URL capability — it only accepts raw bytes. So the bytes must pass
-through your machine. go2cloud eliminates the *disk* cost and the *babysitting*, but the data
-still crosses your connection once. Your **upload** speed is the floor: 200 GB at 40 Mbps is
-about 11 hours no matter how good the code is. The difference is that they're unattended hours.
+API has no import-from-URL capability — it only accepts raw bytes. So every byte is pulled down
+from GoPro and pushed back up to Google through your machine. go2cloud removes the *disk* cost
+and the *babysitting*, and overlaps the two legs so the wall-clock is roughly the upload alone —
+but it cannot remove the traffic. Your **upload** speed is the floor: 200 GB at 40 Mbps is about
+11 hours no matter how good the code is. The difference is that they are unattended hours.
 
 **Every upload counts against your Google storage, at original quality.** The API offers no
 Storage Saver option. A 500 GB library needs a 2 TB Google One plan. go2cloud shows you the
