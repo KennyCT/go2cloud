@@ -234,10 +234,15 @@ withFilters(program.command("transfer").description("stream matching media into 
   .option("--dry-run", "show the plan and stop")
   .option("--yes", "skip the confirmation prompt")
   .option("--concurrency <n>", "files in flight", "3")
+  .option("--limit <n>", "transfer at most N items (useful for a rehearsal)")
+  .option("--min-size <mb>", "only items at least this many MB")
+  .option("--max-size <mb>", "only items at most this many MB")
+  .option("--smallest", "process smallest files first — pairs well with --limit")
   .option("--uplink <mbps>", "assumed upload speed, for the estimate only", "40")
   .action(async (o: Filters & {
     newAlbum?: string; toAlbum?: string; dryRun?: boolean; yes?: boolean;
-    concurrency: string; uplink: string;
+    concurrency: string; uplink: string; limit?: string; smallest?: boolean;
+    minSize?: string; maxSize?: string;
   }) => {
     const store = new Store();
     const gopro = new GoProClient({ onWarn: (m) => err(`  ! ${m}`) });
@@ -248,12 +253,62 @@ withFilters(program.command("transfer").description("stream matching media into 
     if (rows.length === 0) { out("Nothing matched those filters."); store.close(); return; }
     store.upsertMedia(rows as unknown as Array<Record<string, unknown>>);
 
-    const plan = planFrom(rows);
+    let plan = planFrom(rows);
+
+    // Drop work already done, so the pre-flight reports reality rather than the
+    // size of the filter. Chapters are keyed separately, so an item only counts as
+    // finished when item 1 is done and it is not multi-part.
+    const alreadyDone = plan.filter((p) => !p.skip && store.isDone(p.row.id, 1) && (p.row.item_count ?? 1) <= 1);
+    if (alreadyDone.length > 0) {
+      const doneIds = new Set(alreadyDone.map((p) => p.row.id));
+      plan = plan.filter((p) => !doneIds.has(p.row.id));
+      out(`  Skipping ${alreadyDone.length} item(s) already transferred.`);
+    }
+
+    if (o.minSize) {
+      const min = Number(o.minSize) * 1024 * 1024;
+      plan = plan.filter((p) => bytesOf(p.row) >= min);
+    }
+    if (o.maxSize) {
+      const max = Number(o.maxSize) * 1024 * 1024;
+      plan = plan.filter((p) => bytesOf(p.row) <= max);
+    }
+    if (o.smallest) plan = [...plan].sort((a, b) => bytesOf(a.row) - bytesOf(b.row));
+    if (o.limit) {
+      const n = Number(o.limit);
+      const kept = plan.filter((p) => !p.skip).slice(0, n);
+      const keep = new Set(kept.map((p) => p.row.id));
+      plan = plan.filter((p) => keep.has(p.row.id));
+      out(`  --limit ${n}: transferring ${kept.length} of ${rows.length} matching items.`);
+    }
     const label = o.newAlbum ? `new album "${o.newAlbum}"` : o.toAlbum ? `album ${o.toAlbum}` : "Google Photos library (no album)";
     preflight(plan, label, Number(o.uplink));
 
     if (o.dryRun) { out("  Dry run — nothing was transferred."); store.close(); return; }
     if (!o.yes && !(await confirm("  Continue? [y/N] "))) { out("\n  Cancelled."); store.close(); return; }
+
+    // Resolve manifests first. The album is created only once we know there is
+    // something to put in it — Google cannot delete albums via API, so an empty
+    // one would be permanent litter in the user's library.
+    const pending: TransferTask[] = [];
+    for (const p of plan) {
+      if (p.skip) { store.markSkipped(p.row.id, 1, p.skip); continue; }
+      const manifest = await gopro.downloadManifest(p.row.id);
+      const selection = selectAssets(p.row, manifest);
+      if (selection.warning) err(`  ! ${selection.warning}`);
+      if (selection.skip) { store.markSkipped(p.row.id, 1, selection.skip); continue; }
+      for (const asset of selection.assets) {
+        if (store.isDone(p.row.id, asset.itemNumber)) continue;
+        pending.push({ row: p.row, asset });
+      }
+    }
+
+    if (pending.length === 0) {
+      out("  Nothing left to transfer — everything matching is already in Google Photos.");
+      if (o.newAlbum) out("  No album was created.");
+      store.close();
+      return;
+    }
 
     let albumId: string | null = o.toAlbum ?? null;
     if (o.newAlbum) {
@@ -263,19 +318,9 @@ withFilters(program.command("transfer").description("stream matching media into 
       out(`\n  Created album "${album.title}"`);
     }
 
-    // Resolve manifests only for what we will actually send.
-    const tasks: TransferTask[] = [];
-    for (const p of plan) {
-      if (p.skip) { store.markSkipped(p.row.id, 1, p.skip); continue; }
-      const manifest = await gopro.downloadManifest(p.row.id);
-      const selection = selectAssets(p.row, manifest);
-      if (selection.warning) err(`  ! ${selection.warning}`);
-      if (selection.skip) { store.markSkipped(p.row.id, 1, selection.skip); continue; }
-      for (const asset of selection.assets) {
-        if (store.isDone(p.row.id, asset.itemNumber)) continue;
-        store.enqueue(p.row.id, asset.itemNumber, asset.label, albumId, bytesOf(p.row));
-        tasks.push({ row: p.row, asset });
-      }
+    const tasks = pending;
+    for (const t of tasks) {
+      store.enqueue(t.row.id, t.asset.itemNumber, t.asset.label, albumId, bytesOf(t.row));
     }
 
     out(`  Transferring ${tasks.length} assets…\n`);
