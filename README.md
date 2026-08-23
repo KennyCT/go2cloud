@@ -179,6 +179,19 @@ you through it, but the short version:
 You'll see a *"Google hasn't verified this app"* warning. That's expected — the app is **your
 own project**, used only by you. Click **Advanced → Go to go2cloud**.
 
+### Using more than one Google account
+
+You only ever create **one** Cloud project. The OAuth client identifies the *app*, not the
+account, so any Google account can connect to the same client:
+
+```bash
+go2cloud --profile personal auth google     # consent as a second account
+go2cloud --profile personal transfer --from 2024-06-01 --new-album "Summer"
+```
+
+Each profile keeps its own tokens and its own transfer database, so "already transferred" is
+tracked per destination. Omit `--profile` and you get the `default` one.
+
 > **Why bring your own client?** Your media never passes through a shared credential, and your
 > Google project is yours alone. A verified shared client is
 > [planned](docs/PLAN.md#13-future-work--including-a-production-path) to remove this step later.

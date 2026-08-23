@@ -43,10 +43,6 @@ export class GooglePhotosError extends Error {
   }
 }
 
-async function authHeaders(): Promise<Record<string, string>> {
-  return { Authorization: `Bearer ${await accessToken()}` };
-}
-
 /** Names longer than this reject the whole batch, so callers must sanitise first. */
 export function sanitizeFilename(name: string): string {
   const trimmed = name.trim() || "untitled";
@@ -57,12 +53,19 @@ export function sanitizeFilename(name: string): string {
 }
 
 export class GooglePhotosClient {
+  /** Which Google account this client talks to. One OAuth client serves many. */
+  constructor(private readonly profile: string = "default") {}
+
+  private async authHeaders(): Promise<Record<string, string>> {
+    return { Authorization: `Bearer ${await accessToken(this.profile)}` };
+  }
+
   /** Open a resumable session. Granularity is read from the response, never assumed. */
   async startSession(totalBytes: number, mimeType: string): Promise<UploadSession> {
     const res = await fetch(`${API}/v1/uploads`, {
       method: "POST",
       headers: {
-        ...(await authHeaders()),
+        ...(await this.authHeaders()),
         "Content-Length": "0",
         "X-Goog-Upload-Command": "start",
         "X-Goog-Upload-Content-Type": mimeType,
@@ -87,7 +90,7 @@ export class GooglePhotosClient {
     const res = await fetch(session.url, {
       method: "POST",
       headers: {
-        ...(await authHeaders()),
+        ...(await this.authHeaders()),
         "Content-Length": String(data.byteLength),
         "X-Goog-Upload-Command": finalize ? "upload, finalize" : "upload",
         "X-Goog-Upload-Offset": String(offset),
@@ -113,7 +116,7 @@ export class GooglePhotosClient {
   async queryOffset(session: UploadSession): Promise<{ status: string | null; committed: number } | null> {
     const res = await fetch(session.url, {
       method: "POST",
-      headers: { ...(await authHeaders()), "Content-Length": "0", "X-Goog-Upload-Command": "query" },
+      headers: { ...(await this.authHeaders()), "Content-Length": "0", "X-Goog-Upload-Command": "query" },
     });
     if (!res.ok) return null; // session is gone — the caller must restart
     const status = res.headers.get("x-goog-upload-status");
@@ -128,7 +131,7 @@ export class GooglePhotosClient {
     const res = await fetch(`${API}/v1/uploads`, {
       method: "POST",
       headers: {
-        ...(await authHeaders()),
+        ...(await this.authHeaders()),
         "Content-type": "application/octet-stream",
         "X-Goog-Upload-Content-Type": mimeType,
         "X-Goog-Upload-Protocol": "raw",
@@ -167,7 +170,7 @@ export class GooglePhotosClient {
 
     const res = await fetch(`${API}/v1/mediaItems:batchCreate`, {
       method: "POST",
-      headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+      headers: { ...(await this.authHeaders()), "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
@@ -200,7 +203,7 @@ export class GooglePhotosClient {
   async createAlbum(title: string): Promise<{ id: string; title: string }> {
     const res = await fetch(`${API}/v1/albums`, {
       method: "POST",
-      headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+      headers: { ...(await this.authHeaders()), "Content-Type": "application/json" },
       body: JSON.stringify({ album: { title: title.slice(0, 500) } }),
     });
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
@@ -218,7 +221,7 @@ export class GooglePhotosClient {
       const url = new URL(`${API}/v1/albums`);
       url.searchParams.set("pageSize", "50");
       if (pageToken) url.searchParams.set("pageToken", pageToken);
-      const res = await fetch(url, { headers: await authHeaders() });
+      const res = await fetch(url, { headers: await this.authHeaders() });
       if (!res.ok) throw new GooglePhotosError(`Could not list albums (${res.status})`, res.status);
       const json = (await res.json()) as Record<string, unknown>;
       for (const a of (json["albums"] ?? []) as Array<Record<string, unknown>>) {

@@ -11,7 +11,24 @@ import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { readJson, writeJson, deleteSecret } from "../util/keychain.js";
 
+/**
+ * Profiles let one OAuth client serve several Google accounts.
+ *
+ * The OAuth client identifies the *application*, not the user, so a single Cloud
+ * project works for every Google account you own — each account simply consents
+ * separately and gets its own refresh token. Because the app is published to
+ * Production (unverified), any account may consent; the only ceiling is Google's
+ * 100-new-users-lifetime cap for unverified apps, which personal use never reaches.
+ *
+ * The client config is therefore shared across profiles while tokens are per-profile.
+ */
 const ACCOUNT = "google";
+
+export const DEFAULT_PROFILE = "default";
+
+function tokenKey(profile: string): string {
+  return profile === DEFAULT_PROFILE ? ACCOUNT : `${ACCOUNT}:${profile}`;
+}
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 
@@ -53,18 +70,21 @@ const b64url = (b: Buffer) => b.toString("base64url");
 function saveConfig(cfg: GoogleClientConfig): void {
   writeJson(`${ACCOUNT}-client`, cfg);
 }
+/** Shared across profiles — one Cloud project can serve every account you own. */
 export function loadConfig(): GoogleClientConfig | null {
   return readJson<GoogleClientConfig>(`${ACCOUNT}-client`);
 }
-export function loadTokens(): GoogleTokens | null {
-  return readJson<GoogleTokens>(ACCOUNT);
+export function loadTokens(profile: string = DEFAULT_PROFILE): GoogleTokens | null {
+  return readJson<GoogleTokens>(tokenKey(profile));
 }
-export function clearGoogle(): void {
-  deleteSecret(ACCOUNT);
+export function clearGoogle(profile: string = DEFAULT_PROFILE): void {
+  deleteSecret(tokenKey(profile));
+}
+export function forgetClient(): void {
   deleteSecret(`${ACCOUNT}-client`);
 }
 
-function store(body: Record<string, unknown>, fallbackRefresh: string | null): GoogleTokens {
+function store(body: Record<string, unknown>, fallbackRefresh: string | null, profile: string): GoogleTokens {
   const expiresIn = typeof body["expires_in"] === "number" ? body["expires_in"] : 3600;
   const t: GoogleTokens = {
     accessToken: String(body["access_token"] ?? ""),
@@ -72,7 +92,7 @@ function store(body: Record<string, unknown>, fallbackRefresh: string | null): G
     expiresAt: Date.now() + expiresIn * 1000,
     obtainedAt: Date.now(),
   };
-  writeJson(ACCOUNT, t);
+  writeJson(tokenKey(profile), t);
   return t;
 }
 
@@ -80,6 +100,7 @@ function store(body: Record<string, unknown>, fallbackRefresh: string | null): G
 export async function authorize(
   cfg: GoogleClientConfig,
   openBrowser: (url: string) => void,
+  profile: string = DEFAULT_PROFILE,
 ): Promise<GoogleTokens> {
   saveConfig(cfg);
   const verifier = b64url(randomBytes(48));
@@ -134,15 +155,20 @@ export async function authorize(
   });
   const body = (await res.json()) as Record<string, unknown>;
   if (!res.ok) throw new Error(`Token exchange failed: ${JSON.stringify(body)}`);
-  return store(body, null);
+  return store(body, null, profile);
 }
 
 export class GoogleAuthError extends Error {}
 
-export async function accessToken(): Promise<string> {
+export async function accessToken(profile: string = DEFAULT_PROFILE): Promise<string> {
   const cfg = loadConfig();
-  const t = loadTokens();
-  if (!cfg || !t) throw new GoogleAuthError("Not signed in to Google. Run `go2cloud auth google --setup`.");
+  const t = loadTokens(profile);
+  if (!cfg || !t) {
+    throw new GoogleAuthError(
+      `Not signed in to Google${profile === DEFAULT_PROFILE ? "" : ` for profile "${profile}"`}. ` +
+        `Run \`go2cloud auth google${profile === DEFAULT_PROFILE ? "" : ` --profile ${profile}`}\`.`,
+    );
+  }
   if (Date.now() < t.expiresAt - 120_000) return t.accessToken;
   if (!t.refreshToken) throw new GoogleAuthError("No refresh token — re-run `go2cloud auth google`.");
 
@@ -165,5 +191,5 @@ export async function accessToken(): Promise<string> {
         : "";
     throw new GoogleAuthError(`Google refused the refresh grant (${err}).${hint}`);
   }
-  return store(body, t.refreshToken).accessToken;
+  return store(body, t.refreshToken, profile).accessToken;
 }

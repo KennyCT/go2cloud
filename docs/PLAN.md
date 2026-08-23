@@ -255,6 +255,13 @@ scopes go2cloud needs with the same BYO + self-publish workflow.**
 `photoslibrary.appendonly` · `photoslibrary.readonly.appcreateddata` ·
 `photoslibrary.edit.appcreateddata` (only if setting album covers)
 
+**One Cloud project serves every Google account you own.** The OAuth client identifies the
+*application*, not the user: because the app is published to Production (unverified), any Google
+account can consent to the same client and receives its own refresh token. The only ceiling is
+Google's 100-new-users-lifetime cap for unverified apps, which personal use never approaches.
+go2cloud exposes this as `--profile`, namespacing tokens *and* the transfer database per account —
+sharing one database would let a transfer to account A mark work "done" for account B.
+
 **Client type: "Desktop app"** — no redirect URI to register, any ephemeral port, and Google
 still issues the `client_secret` the token exchange expects. "Web application" would force
 pre-registering an exact port.

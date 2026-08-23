@@ -107,8 +107,13 @@ CREATE INDEX IF NOT EXISTS idx_transfers_state ON transfers(state);
 
 const SCHEMA_VERSION = "1";
 
-export function defaultDbPath(): string {
-  return join(homedir(), ".go2cloud", "state.sqlite");
+/**
+ * Transfer state is per destination account, so profiles get their own database.
+ * Sharing one would let a transfer to account A mark work "done" for account B.
+ */
+export function defaultDbPath(profile = "default"): string {
+  const name = profile === "default" ? "state.sqlite" : `state-${profile}.sqlite`;
+  return join(homedir(), ".go2cloud", name);
 }
 
 export class Store {

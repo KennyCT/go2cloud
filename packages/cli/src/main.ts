@@ -12,14 +12,23 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import {
-  GoProClient, GooglePhotosClient, Store, TransferEngine,
+  GoProClient, GooglePhotosClient, Store, TransferEngine, defaultDbPath,
   goproAuth, googleAuth, selectAssets, bytesOf, mimeFor,
   type MediaRow, type TransferTask,
 } from "@go2cloud/core";
 import { bytes, estimate, bar } from "./format.js";
 
 const program = new Command();
-program.name("go2cloud").description("Stream GoPro Cloud media into Google Photos").version("0.1.0");
+program
+  .name("go2cloud")
+  .description("Stream GoPro Cloud media into Google Photos")
+  .version("0.1.0")
+  .option("--profile <name>", "which connected Google account to use", "default");
+
+/** One OAuth client serves many Google accounts; profiles keep their tokens apart. */
+function profileOf(cmd: Command): string {
+  return (cmd.optsWithGlobals() as { profile?: string }).profile ?? "default";
+}
 
 const out = (s = "") => process.stdout.write(s + "\n");
 const err = (s: string) => process.stderr.write(s + "\n");
@@ -64,7 +73,8 @@ auth
   .command("google")
   .description("connect Google Photos")
   .option("--setup <clientJson>", "path to the OAuth client JSON downloaded from Google Cloud")
-  .action(async (o: { setup?: string }) => {
+  .action(async function (this: Command, o: { setup?: string }) {
+    const profile = profileOf(this);
     const cfg = o.setup ? googleAuth.loadClientConfig(o.setup) : googleAuth.loadConfig();
     if (!cfg) {
       err("No OAuth client configured. See docs/SETUP-GOOGLE.md, then:");
@@ -74,14 +84,19 @@ auth
     }
     out("Opening the consent screen. Expect \"Google hasn't verified this app\" —");
     out("that is your own project. Click Advanced → Go to go2cloud.\n");
-    await googleAuth.authorize(cfg, openBrowser);
-    out("Connected to Google Photos.");
+    await googleAuth.authorize(cfg, openBrowser, profile);
+    out(`Connected to Google Photos${profile === "default" ? "" : ` as profile "${profile}"`}.`);
+    if (profile === "default") {
+      out("\nTo connect another Google account, reuse the SAME client:");
+      out("  go2cloud --profile <name> auth google");
+    }
   });
 
 auth
   .command("status")
   .description("show connection status")
-  .action(async () => {
+  .action(async function (this: Command) {
+    const profile = profileOf(this);
     const gp = goproAuth.loadTokens();
     if (!gp) out("GoPro   : not connected");
     else {
@@ -89,12 +104,12 @@ auth
       out(`GoPro   : connected (${mins > 0 ? `expires in ${mins}m` : "EXPIRED"}${gp.refreshToken ? ", auto-refresh on" : ", no refresh token"})`);
     }
     const gc = googleAuth.loadConfig();
-    const gt = googleAuth.loadTokens();
-    if (!gc || !gt) out("Google  : not connected");
+    const gt = googleAuth.loadTokens(profile);
+    if (!gc || !gt) out(`Google  : not connected (profile "${profile}")`);
     else {
       try {
-        await googleAuth.accessToken();
-        out("Google  : connected");
+        await googleAuth.accessToken(profile);
+        out(`Google  : connected (profile "${profile}")`);
       } catch (e) {
         out(`Google  : token problem — ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -123,8 +138,8 @@ function withFilters(cmd: Command): Command {
 }
 
 withFilters(program.command("scan").description("index your GoPro library into local state"))
-  .action(async (o: Filters) => {
-    const store = new Store();
+  .action(async function (this: Command, o: Filters) {
+    const store = new Store(defaultDbPath(profileOf(this)));
     const client = new GoProClient({ onWarn: (m) => err(`  ! ${m}`) });
     const rows: MediaRow[] = [];
     for await (const r of client.search(filterFrom(o))) {
@@ -239,14 +254,15 @@ withFilters(program.command("transfer").description("stream matching media into 
   .option("--max-size <mb>", "only items at most this many MB")
   .option("--smallest", "process smallest files first — pairs well with --limit")
   .option("--uplink <mbps>", "assumed upload speed, for the estimate only", "40")
-  .action(async (o: Filters & {
+  .action(async function (this: Command, o: Filters & {
     newAlbum?: string; toAlbum?: string; dryRun?: boolean; yes?: boolean;
     concurrency: string; uplink: string; limit?: string; smallest?: boolean;
     minSize?: string; maxSize?: string;
-  }) => {
-    const store = new Store();
+  }) {
+    const profile = profileOf(this);
+    const store = new Store(defaultDbPath(profile));
     const gopro = new GoProClient({ onWarn: (m) => err(`  ! ${m}`) });
-    const google = new GooglePhotosClient();
+    const google = new GooglePhotosClient(profile);
 
     const rows: MediaRow[] = [];
     for await (const r of gopro.search(filterFrom(o))) rows.push(r);
@@ -352,8 +368,8 @@ withFilters(program.command("transfer").description("stream matching media into 
 program
   .command("status")
   .description("show transfer progress")
-  .action(() => {
-    const store = new Store();
+  .action(function (this: Command) {
+    const store = new Store(defaultDbPath(profileOf(this)));
     const summary = store.summary();
     if (Object.keys(summary).length === 0) out("Nothing queued yet.");
     else {
