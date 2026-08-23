@@ -56,17 +56,44 @@ auth
   .description("connect GoPro Cloud")
   .option("--paste", "import a token you copied from the browser")
   .option("--token-file <path>", "read the token from a file", join(homedir(), ".go2cloud", "probe_token"))
-  .action((o: { paste?: boolean; tokenFile: string }) => {
-    if (!o.paste) {
-      err("Browser login is not wired up yet (M1). For now use:\n  go2cloud auth gopro --paste");
-      process.exitCode = 1;
+  .action(async (o: { paste?: boolean; tokenFile: string }) => {
+    if (o.paste) {
+      const token = readFileSync(o.tokenFile, "utf8").trim();
+      if (!token) throw new Error(`${o.tokenFile} is empty`);
+      goproAuth.saveCapturedToken(token, null, 3600);
+      out(`Stored a GoPro token in your OS keychain (from ${o.tokenFile}).`);
+      out("A pasted token carries no refresh token, so it expires in about an hour.");
+      out("Run `go2cloud auth gopro` without --paste to get one that refreshes itself.");
       return;
     }
-    const token = readFileSync(o.tokenFile, "utf8").trim();
-    if (!token) throw new Error(`${o.tokenFile} is empty`);
-    goproAuth.saveCapturedToken(token, null, 3600);
-    out(`Stored a GoPro token in your OS keychain (from ${o.tokenFile}).`);
-    out("Captured tokens cannot be refreshed, so this expires in about an hour.");
+
+    const { captureGoProSession } = await import("./gopro-capture.js");
+    out("A browser window will open on GoPro's own login page.");
+    out("Sign in there — your password never passes through go2cloud.\n");
+    const session = await captureGoProSession({ onStatus: (m) => out(`  ${m}`) });
+
+    goproAuth.saveTokens({
+      accessToken: session.accessToken,
+      refreshToken: session.refreshToken,
+      expiresAt: Date.now() + session.expiresInSeconds * 1000,
+      userId: session.userId,
+      obtainedAt: Date.now(),
+    });
+
+    const hours = (session.expiresInSeconds / 3600).toFixed(1);
+    out("");
+    if (session.observedAuthUrls?.length) {
+      out("  Auth-related endpoints seen during login:");
+      for (const u of session.observedAuthUrls.slice(0, 12)) out(`    ${u}`);
+      out("");
+    }
+    if (session.refreshToken) {
+      out("Connected to GoPro. go2cloud will refresh this automatically —");
+      out("you should not need to sign in again.");
+    } else {
+      out(`Connected to GoPro. No refresh token was available, so this session`);
+      out(`lasts ${hours}h and you will need to sign in again after that.`);
+    }
   });
 
 auth
@@ -98,10 +125,14 @@ auth
   .action(async function (this: Command) {
     const profile = profileOf(this);
     const gp = goproAuth.loadTokens();
-    if (!gp) out("GoPro   : not connected");
+    if (!gp) out("GoPro   : not connected  — run `go2cloud auth gopro`");
     else {
-      const mins = Math.round((gp.expiresAt - Date.now()) / 60000);
-      out(`GoPro   : connected (${mins > 0 ? `expires in ${mins}m` : "EXPIRED"}${gp.refreshToken ? ", auto-refresh on" : ", no refresh token"})`);
+      const left = gp.expiresAt - Date.now();
+      const when = left <= 0 ? "EXPIRED — run `go2cloud auth gopro`"
+        : left > 86_400_000 ? `expires in ${(left / 86_400_000).toFixed(1)} days`
+        : left > 3_600_000 ? `expires in ${(left / 3_600_000).toFixed(1)}h`
+        : `expires in ${Math.round(left / 60_000)}m`;
+      out(`GoPro   : connected (${when})`);
     }
     const gc = googleAuth.loadConfig();
     const gt = googleAuth.loadTokens(profile);

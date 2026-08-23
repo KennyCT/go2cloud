@@ -205,7 +205,27 @@ real friction for a public tool's contributors. **Raises the floor to Node ≥ 2
 
 ## 5. Authentication
 
-### 5.1 GoPro — bootstrap once, then refresh ⚠️ *revised*
+### 5.1 GoPro — browser login, valid for a week ⚠️ *revised twice*
+
+> **Corrected 2026-08-23 by live testing.** The refresh-loop plan below does not work
+> from a browser login, and the replacement is simpler than either earlier version.
+>
+> GoPro's web login is a **server-side form POST to `gopro.com/login` that sets a
+> cookie**. It never calls `/v1/oauth2/token`, so **no refresh token is obtainable**
+> by watching the network during login. That endpoint is real — research verified it
+> discriminates valid client credentials — but it serves the mobile apps, and the only
+> grant that reaches it needs the user's password, which go2cloud will not handle.
+>
+> **The session cookie is valid for 168 hours.** Playwright reports the cookie's own
+> expiry, so this is read rather than assumed. The practical outcome is a **weekly**
+> sign-in, not the hourly one an earlier draft feared — good enough that chasing a
+> refresh token is not worth the password-handling risk.
+>
+> `go2cloud auth gopro` therefore opens GoPro's real login page, captures the cookie
+> and its true expiry, and stores both in the keychain. A `401` remains authoritative
+> regardless of the recorded expiry.
+
+### 5.1a Original refresh-loop design (retained for context)
 
 The original plan required re-running Playwright capture whenever the token expired. Research
 found `POST https://api.gopro.com/v1/oauth2/token` is live and the long-published client

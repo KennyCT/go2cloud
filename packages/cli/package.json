@@ -16,7 +16,8 @@
   },
   "dependencies": {
     "@go2cloud/core": "workspace:*",
-    "commander": "^14.0.1"
+    "commander": "^14.0.1",
+    "playwright": "^1.62.1"
   },
   "devDependencies": {
     "@types/node": "^24.7.0",
