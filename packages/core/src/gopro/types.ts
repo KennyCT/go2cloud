@@ -1,41 +1,63 @@
 /**
  * GoPro Cloud response shapes.
  *
- * Schemas are deliberately loose: the API is undocumented, returns ~70 fields per
- * media row, and adds fields without notice. We validate only what we depend on and
- * pass the rest through, so an upstream addition never breaks a scan.
+ * The API is undocumented, returns ~70 fields per media row, and changes field
+ * types without notice — `ready_to_view` was declared boolean here and arrives as
+ * a string, which aborted a whole 212-item scan on first contact with live data.
+ *
+ * So: `id` is the only field that is genuinely required. Every other field is
+ * wrapped in `.catch(undefined)`, meaning a type change upstream degrades that one
+ * field to undefined instead of failing the request. An undocumented API drifting
+ * must never cost a user their scan.
  */
 
 import { z } from "zod";
 
+/** Optional field that yields undefined rather than throwing on an unexpected type. */
+const soft = <T extends z.ZodType>(schema: T) => schema.nullish().catch(undefined);
+
+/** Fields GoPro types inconsistently (booleans as strings, numbers as strings). */
+const softBool = soft(
+  z.union([z.boolean(), z.string()]).transform((v) => (typeof v === "boolean" ? v : v === "true" || v === "1")),
+);
+const softNum = soft(z.union([z.number(), z.string()]).transform((v) => typeof v === "number" ? v : Number.parseInt(v, 10)));
+const softStr = soft(z.string());
+
 export const MediaRow = z
   .object({
-    id: z.string(),
-    type: z.string().nullish(),
-    filename: z.string().nullish(),
-    file_extension: z.string().nullish(),
-    file_size: z.union([z.number(), z.string()]).nullish(),
-    width: z.number().nullish(),
-    height: z.number().nullish(),
-    captured_at: z.string().nullish(),
-    captured_at_timezone: z.string().nullish(),
-    created_at: z.string().nullish(),
-    item_count: z.number().nullish(),
-    /** Superset of the /download variation labels — usable as a cheap pre-flight predicate. */
-    available_labels: z.array(z.string()).nullish(),
-    mce_type: z.string().nullish(),
-    play_as: z.string().nullish(),
-    ready_to_view: z.boolean().nullish(),
+    id: z.string(), // the only genuinely required field
+    type: softStr,
+    filename: softStr,
+    file_extension: softStr,
+    file_size: softNum,
+    width: softNum,
+    height: softNum,
+    captured_at: softStr,
+    captured_at_timezone: softStr,
+    created_at: softStr,
+    item_count: softNum,
+    /** Superset of the /download variation labels — a cheap pre-flight predicate. */
+    available_labels: soft(z.array(z.string())),
+    mce_type: softStr,
+    play_as: softStr,
+    /**
+     * Despite the name this is a processing-state STRING (observed: "ready"), not
+     * a boolean. Coercing it to a boolean silently yields false for every item.
+     */
+    ready_to_view: softStr,
   })
   .loose();
 export type MediaRow = z.infer<typeof MediaRow>;
 
+// _pages drives the completeness assertion, so these must parse — but tolerate
+// numbers arriving as strings, which this API does elsewhere.
+const pageNum = z.union([z.number(), z.string()]).transform((v) => typeof v === "number" ? v : Number.parseInt(v, 10));
 export const Pages = z
   .object({
-    current_page: z.number(),
-    per_page: z.number(),
-    total_items: z.number(),
-    total_pages: z.number(),
+    current_page: pageNum,
+    per_page: pageNum,
+    total_items: pageNum,
+    total_pages: pageNum,
   })
   .loose();
 
@@ -49,15 +71,15 @@ export const SearchResponse = z
 /** One downloadable asset. Note there is NO size field — HEAD the URL for that. */
 export const Variation = z
   .object({
-    label: z.string().nullish(),
-    type: z.string().nullish(),
-    quality: z.string().nullish(),
-    width: z.number().nullish(),
-    height: z.number().nullish(),
-    item_number: z.number().nullish(),
-    available: z.boolean().nullish(),
-    url: z.string().nullish(),
-    head: z.string().nullish(),
+    label: softStr,
+    type: softStr,
+    quality: softStr,
+    width: softNum,
+    height: softNum,
+    item_number: softNum,
+    available: softBool,
+    url: softStr,
+    head: softStr,
   })
   .loose();
 export type Variation = z.infer<typeof Variation>;
@@ -109,10 +131,5 @@ export type MediaItemsResponse = z.infer<typeof MediaItemsResponse>;
 
 export function bytesOf(row: MediaRow): number {
   const v = row.file_size;
-  if (typeof v === "number") return v;
-  if (typeof v === "string") {
-    const n = Number.parseInt(v, 10);
-    return Number.isFinite(n) ? n : 0;
-  }
-  return 0;
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }

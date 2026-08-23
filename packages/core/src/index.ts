@@ -57,3 +57,4 @@ export * from "./gopro/errors.js";
 export * from "./gopro/selection.js";
 export * from "./gopro/types.js";
 export * from "./util/keychain.js";
+export * from "./state/db.js";
