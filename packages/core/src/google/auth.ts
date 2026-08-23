@@ -107,31 +107,32 @@ export async function authorize(
   const challenge = b64url(createHash("sha256").update(verifier).digest());
   const state = b64url(randomBytes(24));
 
-  const { code, redirectUri } = await new Promise<{ code: string; redirectUri: string }>((resolve, reject) => {
+  // The redirect URI must be byte-identical between the authorize request and the
+  // token exchange. It is captured once when the server starts listening: reading
+  // server.address() after close() yields null, which silently produced port 0 and
+  // a redirect_uri_mismatch.
+  let redirectUri = "";
+
+  const code = await new Promise<string>((resolve, reject) => {
     const server = createServer((req, res) => {
-      const url = new URL(req.url ?? "/", `http://127.0.0.1`);
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
       const got = url.searchParams;
       const ok = got.get("code") && got.get("state") === state;
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end(`<h2>go2cloud: ${ok ? "authorised — you can close this tab." : "authorisation failed"}</h2>`);
       server.close();
-      if (ok) {
-        const addr = server.address();
-        const port = typeof addr === "object" && addr ? addr.port : 0;
-        resolve({ code: got.get("code") as string, redirectUri: `http://127.0.0.1:${port}/` });
-      } else {
-        reject(new Error(`Authorisation failed: ${got.get("error") ?? "state mismatch"}`));
-      }
+      if (ok) resolve(got.get("code") as string);
+      else reject(new Error(`Authorisation failed: ${got.get("error") ?? "state mismatch"}`));
     });
     server.on("error", reject);
     server.listen(0, "127.0.0.1", () => {
       const addr = server.address();
       const port = typeof addr === "object" && addr ? addr.port : 0;
-      const redirect = `http://127.0.0.1:${port}/`;
+      redirectUri = `http://127.0.0.1:${port}/`;
       const u = new URL(AUTH_URL);
       u.search = new URLSearchParams({
         client_id: cfg.clientId,
-        redirect_uri: redirect,
+        redirect_uri: redirectUri,
         response_type: "code",
         scope: SCOPES.join(" "),
         access_type: "offline",
