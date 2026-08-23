@@ -2,7 +2,7 @@
   "name": "go2cloud-monorepo",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": { "node": ">=22.5" },
   "packageManager": "pnpm@11.22.0",
   "scripts": {
     "build": "pnpm -r build",

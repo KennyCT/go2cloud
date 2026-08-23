@@ -164,7 +164,7 @@ accesses only the user's own media, read-only, rate-limited, with no delete capa
 
 | Area | Decision | Rationale |
 | --- | --- | --- |
-| Stack | **TypeScript / Node 20+** (installed: Node 24 LTS via fnm, pnpm 11) | One language across engine, CLI, UI. Also forced by GoPro's CORS policy (§2.1). |
+| Stack | **TypeScript / Node ≥22.5** (installed: Node 24 LTS via fnm, pnpm 11) | One language across engine, CLI, UI. Also forced by GoPro's CORS policy (§2.1). |
 | Interfaces | **CLI + local web UI**, one shared core | Loopback OAuth needs a local server anyway. |
 | GoPro auth | **Playwright capture to bootstrap + real OAuth refresh loop** ⚠️ *changed* | Research found a live token endpoint with working published client credentials. See §5.1. |
 | Google auth | **BYO OAuth client, self-published to Production** ⚠️ *changed* | Removes the 7-day re-consent entirely. See §5.2. |
@@ -191,9 +191,15 @@ go2cloud/  (pnpm workspace)
 `core` has zero UI dependencies. CLI and web are thin adapters over it. State lives in
 `~/.go2cloud/`, outside the repo.
 
-**Dependencies:** `undici` (streaming with real backpressure), `playwright` (bootstrap capture),
-`better-sqlite3`, `@napi-rs/keyring` (chosen over the deprecated `keytar`),
-`google-auth-library` (OAuth only — raw `fetch` for the upload path), `zod`, `fastify`.
+**Dependencies — deliberately minimal:** `undici` (streaming with real backpressure), `zod`,
+plus `playwright` (bootstrap capture), `@napi-rs/keyring` (chosen over the deprecated `keytar`)
+and `fastify` (local UI server) as those milestones land. OAuth is hand-rolled against the token
+endpoint — `google-auth-library` is not needed for a loopback/PKCE flow.
+
+⚠️ **State uses Node's built-in `node:sqlite`, not `better-sqlite3`.** Verified stable (no
+experimental warning) on Node 24.19 with SQLite 3.53.3. This removes a native addon that requires
+node-gyp compilation, a pnpm build-script approval, and per-platform binaries — all of which are
+real friction for a public tool's contributors. **Raises the floor to Node ≥ 22.5.**
 
 ---
 
@@ -270,10 +276,19 @@ support email, **homepage URL** and **privacy policy URL*** are all populated:
 > *"Valid app name, support email, homepage url, and privacy policy url are required for switching
 > the app to external production mode."*
 
-**What this is, and is not.** This is **field-presence validation**, not domain-ownership
-validation. Google's Search Console domain verification is a requirement of *submitting for
-verification* — a path go2cloud deliberately does not take. So publishing should succeed with any
-URLs that resolve; whether the console accepts a shared domain such as `github.com` is untested.
+✅ **RESOLVED 2026-08-23: publishing then succeeded.** With the four fields populated — using
+`https://github.com/KennyCT/go2cloud` as homepage and `.../blob/main/PRIVACY.md` as privacy policy,
+**on a domain the developer does not own** — the app published to Production without objection.
+
+This confirms the reading: the console enforces **field presence**, not **domain ownership**.
+Search Console domain verification is a requirement of *submitting for verification*, a path
+go2cloud deliberately does not take.
+
+A persistent banner then appears — *"Your app requires verification. When you have finished
+configuring your information, please submit your app for review."* This is the standard unverified
++ sensitive-scope nag. It is **advisory, not a block**: publishing status is *In production* and
+the 7-day refresh fuse should be gone (U18 confirms on day 8). Whether it constrains API calls is
+U20, which the probe suite exercises directly.
 
 Google's policy guidance additionally states the privacy policy *should* be hosted on the same
 domain as the homepage, so both URLs should share a host.
@@ -287,7 +302,7 @@ The realistic end-user options therefore become:
 | Path | Cost to the user |
 | --- | --- |
 | Accept Testing mode | Re-consent **every 7 days**, forever |
-| Publish with go2cloud's own public URLs | Works only if Google tolerates URLs on a domain the user does not own — untested, and arguably misrepresents authorship |
+| Publish with go2cloud's own public URLs | ✅ **Verified to work.** Still arguably misrepresents authorship, and every user must find and paste them |
 | Publish with the user's own domain | Requires owning a domain — unrealistic for most |
 
 ⚠️ **This materially strengthens the case for the verified shared client in §13.** A one-off
@@ -340,6 +355,36 @@ is the backbone of resume.
 > Copying from those docs fails on Photos. There is also **no `308`** in this protocol — success
 > is `200` everywhere; do not port Firebase's `308` leniency.
 
+✅ **Verified live 2026-08-23** (all against the real API):
+
+- **`X-Goog-Upload-Raw-Size` is NOT mandatory.** Sessions opened successfully with the header
+  omitted, with it set to `0`, and with the Street-View alias substituted — all returned `200`
+  with a usable session URL. ⚠️ *Only session opening was tested; a full streaming upload with an
+  undeclared total was not.* Keep the GoPro `HEAD` until that is proven, then drop it.
+- **Chunk granularity is always `262144`** — identical for 1 MB / 200 MB / 5 GB declared sizes and
+  for both `image/jpeg` and `video/mp4`. Still read it from the response rather than hardcoding.
+- **Every protocol violation returns plain `400` with no `X-Goog-Upload-Status` header:**
+
+  | Action | Result |
+  | --- | --- |
+  | Chunk at a skipped offset | `400` — *not* the `409` Google's reference server implies |
+  | Re-sending an already-committed offset | `400` — **replay is NOT idempotent** |
+  | Misaligned non-final chunk (300000 bytes) | `400` — granularity is enforced |
+  | Query on a corrupted session URL | `400` — same code as all of the above |
+
+- **The session survives a rejected chunk.** After a bad-offset `400`, `query` still returned
+  `active` with the correct committed offset. Recovery works.
+
+⚠️ **`400` is ambiguous** — it means both "bad chunk, session healthy" and "session gone". The
+disambiguator is a follow-up `query`:
+
+```
+on 400 from a chunk POST:
+    q = query(session_url)
+    if q is 200 and status == "active":  resume from q.size_received   # never replay blindly
+    else:                                session is dead -> restart the upload
+```
+
 ### 7.2 The 1-hour CDN window — the hardest constraint
 
 Every ranged GET after 60 minutes `403`s. Required behaviour:
@@ -352,19 +397,44 @@ Every ranged GET after 60 minutes `403`s. Required behaviour:
 4. The Google session is unaffected — its offset is authoritative and the session lives **7 days**
    (the upload *token*, once finalized, lives **24 hours**).
 
-### 7.3 Chunking is a quota decision
+### 7.3 Chunking — quota-free, so resume granularity is the only tradeoff
 
-Quota is **10,000 requests per project per day**. If each chunk `POST` counts (§11 U4), a 20 GB
-video at 256 KiB granularity is 81,920 requests — **8× the entire daily quota for one file**.
+✅ **U4 settled live, 2026-08-23.** A differential test made **32 requests to `/v1/uploads`**
+(1 session start + 31 chunk `POST`s) and **zero** Library API JSON calls. The project's daily
+request counter **did not move** — it read 12 before and 12 after.
 
-Until U4 resolves, **default to the single-request path** (`upload, finalize` at offset 0 with a
-streaming body), which Google itself recommends as "usually the best." Chunk only when the file
-exceeds a threshold or the user wants granular resume — and then use **256 MB**, not the 32 MB
-the first draft proposed. Non-final chunks must satisfy `size % granularity == 0`; the final
-chunk is exempt. Log the request count per media item.
+**Upload byte traffic does not consume the 10,000/day Library API quota.** That quota is spent
+only by JSON methods: `mediaItems:batchCreate`, `albums.create`, `albums.list`,
+`mediaItems:search`.
 
-At ~1 request per item, the practical ceiling is **~9,800 items/day**. Surface "transfer will
-resume tomorrow" rather than failing.
+> *Confidence:* the non-increment is directly observed. The identification of that counter as the
+> 10,000/day Library API quota is inferred from its value matching the JSON-call count almost
+> exactly (12 observed vs ~12 expected, against ~78 total HTTP requests).
+
+**This reverses the plan's most conservative decision.** Chunked uploads were previously feared
+prohibitive — a 20 GB video at 256 KiB granularity is 81,920 requests, which would have been 8×
+the entire daily quota for a single file. That fear was unfounded.
+
+**Revised policy:**
+
+| File size | Mode | Why |
+| --- | --- | --- |
+| < 256 MB | Single request (`upload, finalize` at offset 0) | Fewer round trips; Google's own recommendation |
+| ≥ 256 MB | **Chunked, 64 MB chunks** | Resume granularity. A failure costs one chunk, not the whole file |
+
+Chunk size is now purely a **memory and resume-granularity** decision, not a quota one. 64 MB ×
+3 concurrent files ≈ 192 MB peak RAM, and a dropped connection on a 20 GB clip costs ≤ 64 MB of
+re-transfer instead of restarting from zero. Non-final chunks must satisfy
+`size % granularity == 0`; granularity is `262144` (invariant across every size and MIME type
+tested) but should still be read from the start response.
+
+**Revised throughput ceiling.** The old "~9,800 items/day" figure was wrong — it assumed one quota
+unit per item. With `batchCreate` carrying 50 items per call, 10,000 calls/day allows on the order
+of **500,000 items/day**. For a 2 TB library the binding constraint is **bandwidth, not quota**.
+
+A separate 75,000/day media-byte quota exists and may cover upload traffic; at 64 MB chunks that
+is ~4.8 TB/day, so it is not a practical limit either. Still log per-item request counts so a
+future quota change surfaces early rather than as a mysterious `429`.
 
 ### 7.4 Album mapping — solved by `/media/items`
 
@@ -423,14 +493,30 @@ source is `*.mp4` — independently confirmed in JDownloader's source. The CDN's
 
 ### 7.6 Google-side error handling
 
-- **Parse per-item `newMediaItemResults[i].status.code`.** Handle `207 MULTI-STATUS`. Branch on
-  the integer, never the message (the same sentence appears under four different prefixes):
-  `3` INVALID_ARGUMENT → permanent skip · `6` ALREADY_EXISTS → treat as success ·
-  `13` INTERNAL → retry with bounded attempts. **Never treat HTTP 2xx as success.**
+- **Parse per-item `newMediaItemResults[i].status.code`.** Branch on the integer, never the
+  message: `3` INVALID_ARGUMENT → permanent skip · `6` ALREADY_EXISTS → treat as success ·
+  `13` INTERNAL → retry with bounded attempts.
+  ⚠️ **Verified live: a partial failure returned HTTP `200`, not `207`.** A batch of
+  [valid, garbage, valid] came back `200` with per-item codes `0 / 3 / 0` and both valid items
+  created. **Never treat HTTP 2xx as success** — this is not a theoretical caution, it is the
+  observed default. The `code 3` message was the generic *"Failed: There was an error while trying
+  to create this media item."* with no discriminating prefix, confirming that only the integer is
+  usable.
 - Some failures are **batch-level**: bad `albumId`, full storage, no-permission. Zero items are
   created and all 50 upload tokens remain valid for retry.
 - **Byte uploads may be parallel; `batchCreate` must be serial per user** — parallel batchCreate
   is the documented cause of `500`s. N upload workers feed one serial batcher.
+- ⚠️ **One bad `fileName` destroys the entire batch.** A 300-character name returned a
+  **batch-level** `400 INVALID_ARGUMENT — "File name must not have more than 255 characters."`
+  and **zero of the three items were created**, including the two that were perfectly valid.
+  Validate every `fileName` client-side (≤255 chars, non-empty) *before* batching — otherwise one
+  malformed name costs 50 items' worth of already-uploaded bandwidth.
+- ✅ **Content dedupe confirmed, and it is useful.** Identical bytes uploaded under two different
+  tokens, two different `fileName`s and two different `albumId`s produced **the same
+  `mediaItem.id`**, and that single item was verified present in **both albums**. Two consequences:
+  re-running a transfer into a different album correctly files the existing item rather than
+  duplicating it, and **the first `fileName` wins** — the second is silently ignored, so a rename
+  on re-upload has no effect.
 - **De-duplicate upload tokens within each batch**, or chaptered clips manufacture spurious `6`s.
 - **Two independent rejection handlers:** `4xx` on `/v1/uploads` (permanent) and per-item status
   on `batchCreate`. Handling only the latter hangs on the former.
@@ -592,30 +678,35 @@ time they are hit:
 | U11 | Does a `concat` variation exist for every chaptered medium? | `--chapters=concat` must verify `concat` is present and fall back to `split` if not — never assume. |
 | U11b | Are chapters really N `source` variations keyed by `item_number`? | Every observed variation had `item_number: null` (all single-chapter). The composite PK in §6 stays — it is correct either way and costs nothing. |
 
-### ⏳ Google-side — blocked on a Google Cloud project
+### ✅ Google-side — settled by the protocol suite, 2026-08-23
 
-**Decided 2026-08-23:** throwaway Google account · **full protocol suite** · chapters coded
-defensively rather than recorded. Setup guide: [`SETUP-GOOGLE.md`](./SETUP-GOOGLE.md).
-Tooling ready: `tools/probe_google.py`.
+Run against a throwaway account with Project A published to **Production, unverified**.
+Raw output: `docs/probe-results-google.json`.
 
-⚠️ **The Google Photos API cannot delete anything.** Every probe upload is permanent in the target
-library, which is why the suite points at a throwaway account.
-
-| # | Question | Probe |
+| # | Question | Answer |
 | --- | --- | --- |
-| **U4** | **Do chunk `POST`s each consume the 10,000/day quota?** Highest-value question in the plan — decides whether chunking is viable at all (§7.3) | `U4_chunk_quota` — uploads 40 aligned chunks, then a **manual Cloud Console quota read** ~10 min later |
-| **U18** | Do refresh tokens survive past day 7 in unverified Production? | `--refresh-check` on day 8, against a Testing-mode **control project that must fail** |
-| ~~**U19**~~ | **ANSWERED 2026-08-23: NO.** Publishing to External Production requires app name, support email, **homepage URL and privacy policy URL**. See §5.3 | Console refused with *"Valid app name, support email, homepage url, and privacy policy url are required for switching the app to external production mode."* |
-| **U20** | Does `appendonly` upload work end-to-end from unverified Production? | `U20_end_to_end` — a `403` here rather than at OAuth is plan-invalidating |
-| U21 | Does deduped content land in a second album? | `U21_dedupe_album` |
-| U22 | Is `X-Goog-Upload-Raw-Size` mandatory? | `U22_raw_size_required` — if yes, a GoPro `HEAD` is required before every upload |
-| U17 | Video cap — 10 GB or 20 GB? | `U17_size_cap_sessions` (opt-in `--size-cap`) |
-| — | Scope classification: *sensitive* vs *restricted* | Manual — SETUP step 5. The only authoritative source; the whole no-CASA conclusion rests on it |
-| — | Offset mismatch, replay, misalignment, lost-finalize recovery, unknown session | `protocol_edge_cases`, `unknown_session` — drives all resume logic |
-| — | `207` partial failure with a real per-item code | `U36_partial_failure` |
+| **U20** | Does `appendonly` work from an unverified Production client? | ✅ **Yes.** Upload `200`, `batchCreate` `200`, `code 0 Success`. The *"requires verification"* banner is advisory and **does not gate API access**. §5.2 is validated. |
+| **U19** | Publish without owning the domain? | ✅ Yes — field presence only (§5.3) |
+| **U22** | Is `X-Goog-Upload-Raw-Size` mandatory? | ❌ **No.** Sessions opened with it omitted, zeroed, and aliased. *Caveat: only session opening was tested* — keep the GoPro `HEAD` until a full undeclared-size upload is proven. |
+| **U21** | Does deduped content join a second album? | ✅ **Yes.** Same `mediaItem.id`, verified present in **both** albums. First `fileName` wins. |
+| — | Chunk granularity | Always `262144`, invariant across 1 MB / 200 MB / 5 GB and jpeg / mp4 |
+| — | Protocol violations | **All `400`**, no status header. Bad offset, replayed offset, misalignment, unknown session — indistinguishable by code. Session survives; disambiguate with `query` (§7.1) |
+| — | Replay an committed offset | ❌ **Rejected `400` — not idempotent.** Always `query` then resume; never blindly re-send |
+| — | Partial batch failure | ⚠️ Returned **HTTP `200`**, not `207`, with per-item `0 / 3 / 0`. Never trust the HTTP status |
+| — | Oversized `fileName` | ⚠️ **Batch-level `400`; all items lost.** >255 chars kills the whole call |
+| — | `albums.list` | Returns app-created albums with `isWriteable: true` and live counts |
 
-**U18 is the critical path.** It needs 8 days of wall clock and cannot be compressed, so the
-projects should be created and tokens minted *now*, well before M3 needs the answer.
+✅ **U4 — SETTLED, favourably.** A differential test of 32 uploads-endpoint requests with zero
+Library API calls left the daily counter unchanged at 12. **Upload bytes are quota-free**, so
+chunked uploads with granular resume are viable. §7.3 rewritten; risk R2 closed.
+
+**⏳ U18 — day-8 refresh survival.** Both clocks started 2026-08-23: Project A (Production)
+13:22:42 UTC, Project B (Testing control) 13:27:30 UTC. **Re-check on or after 2026-08-31**
+with `python3 tools/probe_google.py --refresh-check`. Project A must survive; Project B must die.
+
+**⏳ U17 — video size cap** (10 GB vs 20 GB). Deferred: settling it means uploading ~20 GB of
+synthetic video. Cheap mitigation already in the plan — gate on `HEAD` `Content-Length` and
+handle the failure gracefully rather than trusting either number.
 
 ### Not probed deliberately
 
@@ -636,12 +727,44 @@ projects should be created and tokens minted *now*, well before M3 needs the ans
 | M0.5 | §11 research + live probe | ✅ **complete** — 9 of 11 live questions settled; 3 undecidable on this account |
 | M1 | GoPro auth: Playwright bootstrap + OAuth refresh + keychain | next |
 | M2 | Library scan (page-completeness retry), SQLite, `ls`/`albums`/filters | |
-| M3 | Google BYO-OAuth wizard + loopback/PKCE + **U4/U18–U22 probes** | ⏳ blocked on GCP project |
+| M3 | Google BYO-OAuth wizard + loopback/PKCE + **U4/U18–U22 probes** | ✅ protocol suite done — U4 (dashboard) + U18 (day 8) pending |
 | M4 | **Streaming engine** — single-request upload, mid-file re-resolve, resume | |
 | M5 | Batching, concurrency, albums, pre-flight, verification, chapters | |
 | M6 | Docker image | |
 | M7 | Web UI + cosmic theme | |
 | M8 | Public release: docs, disclaimers, published package | |
+
+---
+
+## 12.5 Acceptance test — agreed scope
+
+The first real end-to-end transfer is deliberately narrow, so a failure is diagnosable and the
+blast radius is small. **This is a test scope, not a product constraint** — the engine supports
+arbitrary filters; this is simply what we validate against first.
+
+| | |
+| --- | --- |
+| **Source** | GoPro media captured **2026-01-30** and **2026-01-31** |
+| **Filter** | `captured_range=2026-01-30T00:00:00.000Z,2026-01-31T23:59:59.999Z` |
+| **Variant** | `source` only — never a proxy |
+| **Destination** | A **new** Google Photos album created by go2cloud |
+| **Account** | Decided at run time: throwaway for a rehearsal, real account for the live run |
+
+**Why this window.** It is real footage rather than synthetic, small enough to complete in one
+sitting, and large enough to exercise multi-file concurrency. Probe data shows this period is
+populated (`captured_at` values on 2026-01-30T21:08 and 2026-01-31T22:26–22:35 were sampled).
+
+**What it must demonstrate:**
+
+1. Every item in the window is discovered — with the page-completeness assertion active (§2.4)
+2. `source` is selected every time, never `files[0]` or `variations[0]` (§7.5)
+3. Zero disk usage beyond the bounded in-flight buffer
+4. Capture dates in Google Photos match the GoPro capture dates, not the upload date (§2.5.1)
+5. A mid-transfer interrupt resumes without re-sending completed bytes (§7.2)
+6. A re-run transfers nothing new — idempotency via the state DB (§6)
+
+**Pre-flight must be reviewed before the live run**, since Google Photos cannot delete anything
+that goes wrong (§2.3).
 
 ---
 
@@ -664,6 +787,11 @@ fixes that for everyone. Requirements: a verified domain, a published privacy po
 
 The BYO path stays supported regardless, since it keeps each user's data inside their own project
 and is the right default for the privacy-conscious.
+
+✅ **CASA definitively ruled out (2026-08-23).** The console's own classification tables place
+`appendonly` under *sensitive* and `appcreateddata` under *non-sensitive*, with nothing under
+*restricted*. CASA applies only to restricted scopes, so the verified-client path costs time
+(~10 business days) and a demo video — **no assessor and no recurring fee**.
 
 *(For reference: CASA self-scan was discontinued in 2024 and now requires a paid third-party
 Letter of Validation at roughly $540–3,000/app/year — but that is not the path Photos is on.)*
@@ -689,7 +817,7 @@ Letter of Validation at roughly $540–3,000/app/year — but that is not the pa
 | # | Risk | Severity | Mitigation |
 | --- | --- | --- | --- |
 | R1 | Signed CDN URL expires mid-file (1 h vs ~67 min for a 20 GB clip) | **High** | Pre-emptive re-resolve at T−60s + `403` recovery (§7.2) |
-| R2 | Chunk `POST`s may each consume daily quota | **High** | Single-request default until U4 (§7.3) |
+| ~~R2~~ | ~~Chunk `POST`s may each consume daily quota~~ **Resolved** — U4 proved upload traffic is quota-free | — | Closed. Chunked mode is now the default above 256 MB (§7.3) |
 | R3 | Chapters 2..N silently dropped by a media-id-keyed model | **High** | Composite PK (§6) — was a data-loss bug |
 | R4 | `.LRV`/`.THM` fail *silently by succeeding*, flooding the library | **High** | Selection-layer filter + extension denylist (§7.5) |
 | R5 | **`/media/search` silently returns short pages** — reproduced live: 12 of 212 rows with a `200` and coherent `_pages` | **Critical** | `per_page=50` + per-page and whole-walk completeness assertions; refuse to proceed on a short walk (§2.4) |

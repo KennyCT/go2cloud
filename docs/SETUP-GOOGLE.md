@@ -40,10 +40,21 @@ Console navigation changed in 2025. The old "OAuth consent screen" page is now s
 - App name: `go2cloud`
 - User support email: your throwaway address
 - Developer contact email: same
-- **Leave the homepage, privacy policy and terms URLs empty.** Whether you can publish without
-  them is exactly what we're testing (U19).
+- **Application home page:** `https://github.com/KennyCT/go2cloud`
+- **Application privacy policy link:** `https://github.com/KennyCT/go2cloud/blob/main/PRIVACY.md`
+- Terms of service: leave empty (not required)
 
 **Save.**
+
+> **Why these are mandatory.** Publishing an External app to Production is refused without app
+> name, support email, homepage URL **and** privacy policy URL — confirmed live on 2026-08-23:
+> *"Valid app name, support email, homepage url, and privacy policy url are required for switching
+> the app to external production mode."*
+>
+> Both URLs are on `github.com`, satisfying Google's same-domain guidance for the privacy policy.
+> Domain **ownership** is a requirement of *submitting for verification*, which go2cloud does not
+> do — publishing unverified should only validate that the fields are present and resolve. If the
+> console rejects them anyway, that is a real finding: report it and fall back to Testing mode.
 
 ### 4. Audience — set External
 
@@ -64,11 +75,9 @@ https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata
 
 **Update**, then **Save**.
 
-> 📋 **Tell me what you see.** The scopes get sorted into three labelled tables — *"Your
-> non-sensitive scopes"*, *"Your sensitive scopes"*, *"Your restricted scopes"*. **Which table did
-> each land in?** This is the only authoritative source for that classification, and the entire
-> "no CASA needed" conclusion rests on them being *sensitive* rather than *restricted*. If either
-> shows up under **restricted**, tell me before going further — it changes the plan.
+> ✅ **Confirmed 2026-08-23.** The console sorts these into `appendonly` → **sensitive** and
+> `appcreateddata` → **non-sensitive**, with the *restricted* table empty. That rules out CASA,
+> which applies only to restricted scopes.
 
 ### 6. Create the OAuth client
 
@@ -82,23 +91,34 @@ https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata
 Google masks client secrets permanently after creation — if you close this dialog without
 downloading, you must delete the client and start over.
 
-Save it where the probe expects:
+Save it where the probe expects. **Set `PROJ` to match the project you are currently in** —
+`test` for Project A, `control` for Project B:
 
 ```bash
+PROJ=test          # ← change to "control" when doing Project B
 mkdir -p ~/.go2cloud && chmod 700 ~/.go2cloud
-mv ~/Downloads/client_secret_*.json ~/.go2cloud/google_client_test.json
-chmod 600 ~/.go2cloud/google_client_test.json
+mv ~/Downloads/client_secret_*.json ~/.go2cloud/google_client_$PROJ.json
+chmod 600 ~/.go2cloud/google_client_$PROJ.json
+ls -l ~/.go2cloud/google_client_*.json     # verify BOTH exist before continuing
 ```
+
+> ⚠️ **Do not paste this block unchanged for Project B.** Overwriting
+> `google_client_test.json` destroys Project A's `client_secret`, and Google **masks client
+> secrets permanently after creation** — there is no way to recover it. The only fix is to
+> create a brand-new OAuth client in Project A. Any refresh token minted against the lost
+> client also becomes permanently unusable.
 
 ### 7. Publish to Production ⏱️ *starts the 8-day clock* 📋 *this is a probe*
 
 **Google Auth platform → Audience → Publish app** → confirm.
 
-> 📋 **Tell me exactly what happens.** Three possible outcomes, and they mean very different things:
-> - **It publishes** → status becomes *In production*. This is the outcome the plan assumes.
-> - **It demands a homepage / privacy policy URL** → tell me. BYO-Production may be dead, and
->   everyone falls back to weekly re-auth.
-> - **It demands verification before allowing the scopes** → tell me. Same fallback.
+> ✅ **Confirmed 2026-08-23: this works.** With the four Branding fields populated the app
+> publishes to Production even though the URLs are on a domain you do not own — the console checks
+> field presence, not ownership.
+>
+> Afterwards a banner appears: *"Your app requires verification… please submit your app for
+> review."* **Ignore it.** It is the standard unverified + sensitive-scope nag, not a block. Do
+> **not** submit for review — verification is the §13 future path, not this one.
 
 Publishing **before** first consent matters: a token minted while in Testing may keep its 7-day
 fuse even after publishing (U27). We mint tokens only after this step.
@@ -111,10 +131,25 @@ Repeat steps 1–6 with:
 
 - Project name `go2cloud-control`
 - Client name `go2cloud-control-cli`
-- Save the JSON as `~/.go2cloud/google_client_control.json`
+- **Step 6: set `PROJ=control`** so the JSON lands at `~/.go2cloud/google_client_control.json`
+  and does **not** overwrite Project A's
 
-**Do not publish this one.** Leave it in *Testing* and add your throwaway address under
-**Audience → Test users**.
+### 7b. Do NOT publish — add yourself as a test user instead
+
+**This is a required step, not an optional one.** A Testing-mode app rejects everyone who is not
+on its test-user list:
+
+1. **Google Auth platform → Audience**
+2. Leave publishing status as **Testing** — do *not* click Publish app
+3. Under **Test users** → **+ Add users** → enter the email of the account you will sign in with
+4. **Save**
+
+> Skipping this produces:
+> *"go2cloud has not completed the Google verification process. The app is currently being tested,
+> and can only be accessed by developer-approved testers. … Error 403: access_denied"*
+>
+> If your browser is signed into several Google accounts, make sure the address you add matches
+> the one the consent screen actually signs in as.
 
 This project's refresh token **must** die on day 8. If it survives, the whole experiment is
 invalid and we learn nothing from Project A.
@@ -139,11 +174,11 @@ Then on day 8 I re-run one command against both projects and U18 is settled.
 
 ## Checklist
 
-- [ ] Throwaway Google account created
-- [ ] `go2cloud-test`: Photos Library API enabled
-- [ ] `go2cloud-test`: branding saved, **URLs left empty**
-- [ ] `go2cloud-test`: two scopes added → **which table did they land in?**
-- [ ] `go2cloud-test`: Desktop client created, JSON downloaded → `~/.go2cloud/google_client_test.json`
-- [ ] `go2cloud-test`: **published to Production** → what happened?
+- [x] Throwaway Google account created
+- [x] `go2cloud-test`: Photos Library API enabled
+- [x] `go2cloud-test`: branding saved **with the two github.com URLs**
+- [x] `go2cloud-test`: two scopes added (sensitive / non-sensitive — no CASA)
+- [x] `go2cloud-test`: Desktop client created, JSON downloaded → `~/.go2cloud/google_client_test.json`
+- [x] `go2cloud-test`: **published to Production** ✅ (verification banner is expected; ignore it)
 - [ ] `go2cloud-control`: same, **left in Testing**, self added as test user
       → `~/.go2cloud/google_client_control.json`

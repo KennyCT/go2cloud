@@ -82,7 +82,7 @@ The only runnable piece today is the **read-only API probe** — see
 
 ## Requirements
 
-- **Node.js ≥ 20** (repo pins 24 LTS via [`fnm`](https://github.com/Schniz/fnm) and `.node-version`)
+- **Node.js ≥ 22.5** (repo pins 24 LTS via [`fnm`](https://github.com/Schniz/fnm) and `.node-version`)
 - **A GoPro Premium or Premium+ subscription** with media in GoPro Cloud
 - **A Google account** with enough storage headroom for what you're transferring
 - **A Google Cloud project** — free, and the setup wizard walks you through it (~5 minutes)
