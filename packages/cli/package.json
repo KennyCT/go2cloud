@@ -3,12 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": { "go2cloud": "./dist/main.js" },
-  "engines": { "node": ">=22.5" },
+  "bin": {
+    "go2cloud": "./dist/main.js"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test"
+    "test": "tsc -p tsconfig.json && node --test dist/**/*.test.js"
   },
   "dependencies": {
     "@go2cloud/core": "workspace:*",
