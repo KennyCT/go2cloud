@@ -44,6 +44,22 @@ export interface Selection {
   warning: string | null;
 }
 
+export interface SelectionOptions {
+  /**
+   * How to handle a chaptered video — one GoPro medium containing N chapter files.
+   *
+   * "split"  uploads each chapter as its own Google Photos item. Default, because it
+   *          sends the original bytes and so preserves capture metadata exactly.
+   * "concat" uploads GoPro's server-stitched single file instead, giving one
+   *          continuous clip with no ffmpeg and no disk. It is a re-render, so its
+   *          metadata fidelity is unverified, and it falls back to "split" when GoPro
+   *          has not produced a concat for that medium.
+   */
+  chapters?: "split" | "concat" | undefined;
+  /** Force a specific variation label instead of preferring an original. */
+  variant?: string | undefined;
+}
+
 const area = (v: Variation) => (v.width ?? 0) * (v.height ?? 0);
 const usable = (v: Variation) => v.available !== false && typeof v.url === "string" && v.url.length > 0;
 
@@ -59,7 +75,11 @@ function toAsset(v: Variation, fallbackIndex: number, degraded: boolean): Select
   };
 }
 
-export function selectAssets(row: MediaRow, manifest: DownloadManifest): Selection {
+export function selectAssets(
+  row: MediaRow,
+  manifest: DownloadManifest,
+  options: SelectionOptions = {},
+): Selection {
   // 1. Quik edit projects are not real media — GoPro's own web grid hides them.
   if (row.play_as === "edl" && row.mce_type === "user_created") {
     return { assets: [], skip: "quik-edit-project", warning: null };
@@ -74,10 +94,57 @@ export function selectAssets(row: MediaRow, manifest: DownloadManifest): Selecti
   const variations = (manifest._embedded.variations ?? []).filter(usable);
   const files = (manifest._embedded.files ?? []).filter(usable);
 
+  // An explicit --variant overrides everything, including the original-only rule.
+  if (options.variant) {
+    const wanted = variations.filter((v) => v.label === options.variant);
+    if (wanted.length > 0) {
+      const degraded = !ORIGINAL_LABELS.includes(options.variant as never);
+      return {
+        assets: wanted
+          .slice()
+          .sort((a, b) => (a.item_number ?? 1) - (b.item_number ?? 1))
+          .map((v, i) => toAsset(v, i + 1, degraded)),
+        skip: null,
+        warning: degraded
+          ? `Using variant "${options.variant}" for ${row.filename ?? row.id} instead of the ` +
+            `original; quality and the capture date may be degraded.`
+          : null,
+      };
+    }
+    return {
+      assets: [],
+      skip: "no-downloadable-asset",
+      warning: `${row.filename ?? row.id} has no "${options.variant}" variant.`,
+    };
+  }
+
   // 3. Originals only. A chaptered video yields several of these, one per item_number.
   const originals = variations.filter((v) => ORIGINAL_LABELS.includes((v.label ?? "") as never));
   if (originals.length > 0) {
     const sorted = [...originals].sort((a, b) => (a.item_number ?? 1) - (b.item_number ?? 1));
+
+    // Prefer GoPro's stitched rendering when asked, but only if it actually exists.
+    if (options.chapters === "concat" && sorted.length > 1) {
+      const concat = variations.find((v) => v.label === "concat");
+      if (concat) {
+        return {
+          assets: [toAsset(concat, 1, false)],
+          skip: null,
+          warning:
+            `${row.filename ?? row.id}: uploading GoPro's stitched "concat" rendering as one ` +
+            `clip instead of ${sorted.length} chapters. It is a re-render, so its embedded ` +
+            `capture date may differ from the source.`,
+        };
+      }
+      return {
+        assets: sorted.map((v, i) => toAsset(v, i + 1, false)),
+        skip: null,
+        warning:
+          `${row.filename ?? row.id} has no "concat" rendering, so its ${sorted.length} chapters ` +
+          `will upload separately.`,
+      };
+    }
+
     return {
       assets: sorted.map((v, i) => toAsset(v, i + 1, false)),
       skip: null,

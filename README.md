@@ -320,7 +320,7 @@ Setup: [`docs/SETUP-GOOGLE.md`](docs/SETUP-GOOGLE.md) · GoPro details:
 
 | Symptom | Cause and fix |
 | --- | --- |
-| `401` from GoPro | Token expired. `go2cloud auth gopro` again. |
+| `401` from GoPro | Session expired. Run `go2cloud auth gopro` again. GoPro publishes no session lifetime and ends them unpredictably — observed lifetimes are hours, so expect to sign in more than once a day during long sessions. |
 | `406` from GoPro | Missing vendor `Accept` header — a bug; please file an issue. |
 | `410` from GoPro | GoPro changed their API version. **Please open an issue** — this is the deprecation canary. |
 | `invalid_grant` from Google after ~7 days | Your OAuth app is still in "Testing". Set Publishing status to **In production** (setup step 4). |

@@ -197,4 +197,41 @@ export class GoProClient {
       await this.request("/media/items", { parent_id: albumId, per_page: "100", page: "1" }),
     );
   }
+
+  /**
+   * Media inside an album, as full rows.
+   *
+   * /media/search cannot filter by album — parent_id is null on every row and passing
+   * it as a parameter is silently ignored. But /media/items inlines the whole medium
+   * object alongside membership, so one request per album yields both.
+   */
+  async albumMedia(albumId: string): Promise<MediaRow[]> {
+    const out: MediaRow[] = [];
+    for (let page = 1; page <= 20; page++) {
+      const res = MediaItemsResponse.parse(
+        await this.request("/media/items", { parent_id: albumId, per_page: "100", page: String(page) }),
+      );
+      const items = res.items ?? [];
+      for (const item of items) if (item.medium) out.push(item.medium);
+      const pages = res._pages;
+      if (items.length === 0 || !pages || page >= pages.total_pages) break;
+    }
+    return out;
+  }
+
+  /**
+   * Real albums only.
+   *
+   * Excludes share links (label !== "mural") and the account's root container, which
+   * is itself a mural-labelled collection that every real album lists in parent_ids.
+   * Including it would offer the user an "album" holding their entire library.
+   */
+  async albumList(): Promise<Array<{ id: string; title: string }>> {
+    const res = await this.albums();
+    const items = (res.items ?? []).filter((i) => i.type === "collection" && i.label === "mural");
+    const rootIds = new Set(items.flatMap((i) => i.parent_ids ?? []));
+    return items
+      .filter((i) => i.root !== true && !rootIds.has(i.id))
+      .map((i) => ({ id: i.id, title: i.title ?? "(untitled)" }));
+  }
 }

@@ -25,11 +25,26 @@ const REFRESH_MARGIN_MS = 30 * 60 * 1000;
 export interface GoProTokens {
   accessToken: string;
   refreshToken: string | null;
-  /** Epoch ms. Derived from `expires_in`, never from the token itself. */
+  /**
+   * Best-effort upper bound only — NEVER trust this as validity.
+   *
+   * A browser-captured session cookie advertises a 168-hour expiry, but that is the
+   * cookie's browser-persistence attribute, not how long GoPro honours the session.
+   * Observed lifetimes are hours: one token died in about nine, another mid-session.
+   * A 401 is the only authoritative signal, so the value here is capped to something
+   * plausible and the 401 path drives re-authentication regardless.
+   */
   expiresAt: number;
   userId: string | null;
   obtainedAt: number;
 }
+
+/**
+ * How long a browser-captured session is assumed good for before we warn.
+ * Deliberately conservative: over-trusting the cookie's stated expiry means telling
+ * users they are connected when they are not.
+ */
+export const ASSUMED_SESSION_MS = 8 * 60 * 60 * 1000;
 
 /**
  * The access token may be a JWE rather than a JWT, so its `exp` claim is not
@@ -67,7 +82,8 @@ export function saveCapturedToken(accessToken: string, userId: string | null, ex
   saveTokens({
     accessToken,
     refreshToken: null,
-    expiresAt: Date.now() + expiresInSeconds * 1000,
+    // Cap whatever the cookie claims — see the note on expiresAt.
+    expiresAt: Date.now() + Math.min(expiresInSeconds * 1000, ASSUMED_SESSION_MS),
     userId,
     obtainedAt: Date.now(),
   });

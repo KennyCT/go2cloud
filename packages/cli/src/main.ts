@@ -72,15 +72,12 @@ auth
     out("Sign in there — your password never passes through go2cloud.\n");
     const session = await captureGoProSession({ onStatus: (m) => out(`  ${m}`) });
 
-    goproAuth.saveTokens({
-      accessToken: session.accessToken,
-      refreshToken: session.refreshToken,
-      expiresAt: Date.now() + session.expiresInSeconds * 1000,
-      userId: session.userId,
-      obtainedAt: Date.now(),
-    });
+    // saveCapturedToken caps the cookie's advertised lifetime — see GoProTokens.expiresAt.
+    goproAuth.saveCapturedToken(session.accessToken, session.userId, session.expiresInSeconds);
 
-    const hours = (session.expiresInSeconds / 3600).toFixed(1);
+    // Report what is actually stored, not the cookie's inflated claim.
+    const stored = goproAuth.loadTokens();
+    const hours = stored ? ((stored.expiresAt - Date.now()) / 3600000).toFixed(1) : "?";
     out("");
     if (session.observedAuthUrls?.length) {
       out("  Auth-related endpoints seen during login:");
@@ -91,8 +88,9 @@ auth
       out("Connected to GoPro. go2cloud will refresh this automatically —");
       out("you should not need to sign in again.");
     } else {
-      out(`Connected to GoPro. No refresh token was available, so this session`);
-      out(`lasts ${hours}h and you will need to sign in again after that.`);
+      out("Connected to GoPro.");
+      out(`GoPro publishes no session lifetime and ends sessions unpredictably —`);
+      out(`assume roughly ${hours}h, and re-run this when a command reports a 401.`);
     }
   });
 
@@ -128,11 +126,11 @@ auth
     if (!gp) out("GoPro   : not connected  — run `go2cloud auth gopro`");
     else {
       const left = gp.expiresAt - Date.now();
-      const when = left <= 0 ? "EXPIRED — run `go2cloud auth gopro`"
-        : left > 86_400_000 ? `expires in ${(left / 86_400_000).toFixed(1)} days`
-        : left > 3_600_000 ? `expires in ${(left / 3_600_000).toFixed(1)}h`
-        : `expires in ${Math.round(left / 60_000)}m`;
-      out(`GoPro   : connected (${when})`);
+      // GoPro gives no reliable expiry, so this is an estimate, not a promise.
+      const when = left <= 0 ? "likely expired — run `go2cloud auth gopro`"
+        : left > 3_600_000 ? `good for roughly ${(left / 3_600_000).toFixed(1)}h`
+        : `expiring soon (~${Math.round(left / 60_000)}m)`;
+      out(`GoPro   : connected (${when}; GoPro may end it sooner)`);
     }
     const gc = googleAuth.loadConfig();
     const gt = googleAuth.loadTokens(profile);
@@ -149,7 +147,43 @@ auth
 
 // ---- library -------------------------------------------------------------- //
 
-interface Filters { from?: string; to?: string; uploadedFrom?: string; uploadedTo?: string; type?: string }
+interface Filters {
+  from?: string; to?: string; uploadedFrom?: string; uploadedTo?: string;
+  type?: string; album?: string;
+}
+
+async function rowsFor(client: GoProClient, o: Filters): Promise<MediaRow[]> {
+  const f = filterFrom(o);
+  if (!o.album) {
+    const rows: MediaRow[] = [];
+    for await (const r of client.search(f)) rows.push(r);
+    return rows;
+  }
+  // /media/search silently ignores any album parameter, so membership comes from
+  // /media/items and the remaining filters are applied here.
+  const albums = await client.albumList();
+  const match = albums.find((a) => a.id === o.album) ??
+    albums.find((a) => a.title.toLowerCase() === o.album?.toLowerCase()) ??
+    albums.find((a) => a.title.toLowerCase().includes((o.album ?? "").toLowerCase()));
+  if (!match) {
+    throw new Error(
+      `No GoPro album matching "${o.album}". Available: ${albums.map((a) => a.title).join(", ") || "none"}`,
+    );
+  }
+  const inRange = (iso: string | null | undefined, lo?: Date, hi?: Date) => {
+    if (!lo && !hi) return true;
+    if (!iso) return false;
+    const t = new Date(iso).getTime();
+    return (!lo || t >= lo.getTime()) && (!hi || t <= hi.getTime());
+  };
+  const types = f.types;
+  return (await client.albumMedia(match.id)).filter(
+    (r) =>
+      inRange(r.captured_at, f.capturedFrom, f.capturedTo) &&
+      inRange(r.created_at, f.createdFrom, f.createdTo) &&
+      (!types || types.includes(String(r.type))),
+  );
+}
 
 function filterFrom(o: Filters) {
   return {
@@ -165,18 +199,15 @@ function withFilters(cmd: Command): Command {
     .option("--to <date>", "captured on or before (YYYY-MM-DD)")
     .option("--uploaded-from <date>", "uploaded to GoPro Cloud on or after")
     .option("--uploaded-to <date>", "uploaded to GoPro Cloud on or before")
-    .option("--type <types>", "comma-separated media types, e.g. Video,Photo");
+    .option("--type <types>", "comma-separated media types, e.g. Video,Photo")
+    .option("--album <nameOrId>", "only media in this GoPro album");
 }
 
 withFilters(program.command("scan").description("index your GoPro library into local state"))
   .action(async function (this: Command, o: Filters) {
     const store = new Store(defaultDbPath(profileOf(this)));
     const client = new GoProClient({ onWarn: (m) => err(`  ! ${m}`) });
-    const rows: MediaRow[] = [];
-    for await (const r of client.search(filterFrom(o))) {
-      rows.push(r);
-      if (rows.length % 50 === 0) process.stderr.write(`\r  scanned ${rows.length}…`);
-    }
+    const rows = await rowsFor(client, o);
     process.stderr.write("\r");
     store.upsertMedia(rows as unknown as Array<Record<string, unknown>>);
     out(`Indexed ${rows.length} items (${bytes(rows.reduce((n, r) => n + bytesOf(r), 0))}).`);
@@ -188,7 +219,7 @@ withFilters(program.command("ls").description("list matching media"))
   .action(async (o: Filters & { limit: string }) => {
     const client = new GoProClient({ onWarn: (m) => err(`  ! ${m}`) });
     let shown = 0, total = 0, size = 0;
-    for await (const r of client.search(filterFrom(o))) {
+    for (const r of await rowsFor(client, o)) {
       total++; size += bytesOf(r);
       if (shown < Number(o.limit)) {
         out(`  ${(r.captured_at ?? "").slice(0, 19).padEnd(20)} ${(r.type ?? "?").padEnd(14)} ${(r.filename ?? r.id).padEnd(20)} ${bytes(bytesOf(r)).padStart(10)}`);
@@ -204,10 +235,9 @@ program
   .description("list your GoPro albums")
   .action(async () => {
     const client = new GoProClient();
-    const res = await client.albums();
-    const items = (res.items ?? []).filter((i) => i.type === "collection");
+    const items = await client.albumList();
     if (items.length === 0) { out("No albums found."); return; }
-    for (const a of items) out(`  ${(a.id ?? "").padEnd(38)} ${a.title ?? "(untitled)"}`);
+    for (const a of items) out(`  ${a.id.padEnd(38)} ${a.title}`);
     out(`\n${items.length} albums`);
   });
 
@@ -281,6 +311,8 @@ withFilters(program.command("transfer").description("stream matching media into 
   .option("--yes", "skip the confirmation prompt")
   .option("--concurrency <n>", "files in flight", "3")
   .option("--batch-size <n>", "uploads to accumulate before committing them", "10")
+  .option("--variant <label>", "force a variation label instead of the original")
+  .option("--chapters <mode>", "split | concat — how to handle chaptered videos", "split")
   .option("--limit <n>", "transfer at most N items (useful for a rehearsal)")
   .option("--min-size <mb>", "only items at least this many MB")
   .option("--max-size <mb>", "only items at most this many MB")
@@ -289,6 +321,7 @@ withFilters(program.command("transfer").description("stream matching media into 
   .action(async function (this: Command, o: Filters & {
     newAlbum?: string; toAlbum?: string; dryRun?: boolean; yes?: boolean;
     concurrency: string; uplink: string; limit?: string; smallest?: boolean; batchSize?: string;
+    variant?: string; chapters?: string;
     minSize?: string; maxSize?: string;
   }) {
     const profile = profileOf(this);
@@ -296,8 +329,7 @@ withFilters(program.command("transfer").description("stream matching media into 
     const gopro = new GoProClient({ onWarn: (m) => err(`  ! ${m}`) });
     const google = new GooglePhotosClient(profile);
 
-    const rows: MediaRow[] = [];
-    for await (const r of gopro.search(filterFrom(o))) rows.push(r);
+    const rows = await rowsFor(gopro, o);
     if (rows.length === 0) { out("Nothing matched those filters."); store.close(); return; }
     store.upsertMedia(rows as unknown as Array<Record<string, unknown>>);
 
@@ -342,7 +374,10 @@ withFilters(program.command("transfer").description("stream matching media into 
     for (const p of plan) {
       if (p.skip) { store.markSkipped(p.row.id, 1, p.skip); continue; }
       const manifest = await gopro.downloadManifest(p.row.id);
-      const selection = selectAssets(p.row, manifest);
+      const selection = selectAssets(p.row, manifest, {
+        variant: o.variant,
+        chapters: o.chapters === "concat" ? "concat" : "split",
+      });
       if (selection.warning) err(`  ! ${selection.warning}`);
       if (selection.skip) { store.markSkipped(p.row.id, 1, selection.skip); continue; }
       for (const asset of selection.assets) {
@@ -419,6 +454,87 @@ program
       const remaining = store.bytesRemaining();
       if (remaining > 0) out(`\n  ${bytes(remaining)} remaining`);
     }
+    store.close();
+  });
+
+
+program
+  .command("resume")
+  .description("continue transfers left unfinished by a previous run")
+  .option("--concurrency <n>", "files in flight", "3")
+  .action(async function (this: Command, o: { concurrency: string }) {
+    const profile = profileOf(this);
+    const store = new Store(defaultDbPath(profile));
+    const rows = store.pending();
+    if (rows.length === 0) { out("Nothing to resume."); store.close(); return; }
+
+    const gopro = new GoProClient({ onWarn: (m) => err(`  ! ${m}`) });
+    const google = new GooglePhotosClient(profile);
+
+    out(`  Resuming ${rows.length} unfinished asset(s), ${bytes(store.bytesRemaining())} remaining.\n`);
+
+    // Re-resolve each medium: download URLs are never persisted, only media ids.
+    const tasks: TransferTask[] = [];
+    const albumIds = new Set<string>();
+    for (const r of rows) {
+      const manifest = await gopro.downloadManifest(r.gopro_media_id);
+      const row: MediaRow = { id: r.gopro_media_id };
+      const selection = selectAssets(row, manifest);
+      const asset = selection.assets.find((a) => a.itemNumber === r.item_number);
+      if (!asset) {
+        err(`  ! ${r.gopro_media_id}#${r.item_number} is no longer in the manifest; skipping`);
+        continue;
+      }
+      if (r.target_album_id) albumIds.add(r.target_album_id);
+      tasks.push({ row, asset });
+    }
+    if (albumIds.size > 1) err(`  ! these assets target ${albumIds.size} different albums; using the first`);
+
+    const engine = new TransferEngine(gopro, google, store, {
+      concurrency: Number(o.concurrency),
+      albumId: [...albumIds][0] ?? null,
+      onLog: (m) => err(`  ! ${m}`),
+      onProgress: (e) => {
+        if (e.phase === "done") process.stderr.write(`  ✓ ${e.filename}\n`);
+        else if (e.phase === "failed") process.stderr.write(`  ✗ ${e.filename}: ${e.message ?? ""}\n`);
+      },
+    });
+    const result = await engine.run(tasks);
+    out(`\n  ${result.created} created, ${result.skipped} skipped, ${result.failed} failed.`);
+    store.close();
+  });
+
+program
+  .command("verify")
+  .description("confirm transferred items are really in Google Photos")
+  .option("--limit <n>", "how many to check", "200")
+  .action(async function (this: Command, o: { limit: string }) {
+    const profile = profileOf(this);
+    const store = new Store(defaultDbPath(profile));
+    const google = new GooglePhotosClient(profile);
+
+    const albums = store.googleAlbums();
+    if (albums.length === 0) { out("No go2cloud albums recorded for this profile."); store.close(); return; }
+
+    // Only app-created albums are visible to this scope; that is a Google restriction.
+    const live = await google.listAlbums();
+    let ok = 0, missing = 0;
+    for (const a of albums) {
+      const found = live.find((l) => l.id === a.id);
+      if (!found) {
+        out(`  ✗ "${a.title}" is no longer visible — it may have been deleted in the Photos app`);
+        missing++;
+        continue;
+      }
+      out(`  ✓ "${found.title}" — ${found.itemCount} items in Google Photos`);
+      ok++;
+    }
+    const summary = store.summary();
+    out("");
+    out(`  local state: ${summary["verified"] ?? 0} verified, ${summary["failed"] ?? 0} failed, ` +
+        `${(summary["pending"] ?? 0) + (summary["uploading"] ?? 0)} outstanding`);
+    if (missing > 0) process.exitCode = 1;
+    void ok; void o;
     store.close();
   });
 

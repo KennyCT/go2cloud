@@ -216,10 +216,17 @@ real friction for a public tool's contributors. **Raises the floor to Node ≥ 2
 > discriminates valid client credentials — but it serves the mobile apps, and the only
 > grant that reaches it needs the user's password, which go2cloud will not handle.
 >
-> **The session cookie is valid for 168 hours.** Playwright reports the cookie's own
-> expiry, so this is read rather than assumed. The practical outcome is a **weekly**
-> sign-in, not the hourly one an earlier draft feared — good enough that chasing a
-> refresh token is not worth the password-handling risk.
+> ⚠️ **Corrected again after live use.** The cookie *advertises* a 168-hour expiry and
+> go2cloud initially believed it. That is the cookie's browser-persistence attribute,
+> **not** how long GoPro honours the session: one captured token died after roughly
+> nine hours, and a second stopped working the same day it was minted. There is no
+> published session lifetime and no way to interrogate it.
+>
+> The stored expiry is therefore treated as an unreliable upper bound, capped at 8
+> hours for display purposes, and **a `401` is the only authoritative signal**. The
+> practical cost is signing in again when a run reports an expired session, which the
+> error message states explicitly. This does not threaten a long transfer: the 4h14m
+> 65 GB run completed on a single session.
 >
 > `go2cloud auth gopro` therefore opens GoPro's real login page, captures the cookie
 > and its true expiry, and stores both in the keychain. A `401` remains authoritative
@@ -760,7 +767,7 @@ handle the failure gracefully rather than trusting either number.
 | M2 | Library scan (page-completeness retry), SQLite, `ls`/`albums`/filters | |
 | M3 | Google BYO-OAuth wizard + loopback/PKCE + **U4/U18–U22 probes** | ✅ protocol suite done — U4 (dashboard) + U18 (day 8) pending |
 | M4 | **Streaming engine** — single-request upload, mid-file re-resolve, resume | |
-| M5 | Batching, concurrency, albums, pre-flight, verification, chapters | |
+| M5 | Batching, concurrency, albums, pre-flight, verification, chapters | ✅ done |
 | M6 | Docker image | |
 | M7 | Web UI + cosmic theme | |
 | M8 | Public release: docs, disclaimers, published package | |

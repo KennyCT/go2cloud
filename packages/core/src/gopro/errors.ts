@@ -46,7 +46,11 @@ export class GoProError extends Error {
 export function classify(status: number, body?: string): GoProError {
   switch (status) {
     case 401:
-      return new GoProError("unauthorized", "GoPro rejected the credentials", status);
+      return new GoProError(
+        "unauthorized",
+        "GoPro session expired or rejected. Run `go2cloud auth gopro` to sign in again.",
+        status,
+      );
     case 403:
       return new GoProError("url-expired", "Signed URL expired or forbidden", status);
     case 404:

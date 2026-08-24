@@ -142,3 +142,55 @@ test("likelyHasOriginal uses available_labels as a cheap pre-flight predicate", 
   assert.equal(likelyHasOriginal(row({ available_labels: ["edit_proxy", "mediainfo"] })), false);
   assert.equal(likelyHasOriginal(row({ available_labels: [] })), true, "unknown must not skip");
 });
+
+// ---- --variant and --chapters ------------------------------------------- //
+
+const CHAPTERED: DownloadManifest = {
+  _embedded: {
+    variations: [
+      { label: "source", item_number: 1, width: 3840, height: 2160, available: true, url: url("c1"), head: null },
+      { label: "source", item_number: 2, width: 3840, height: 2160, available: true, url: url("c2"), head: null },
+      { label: "concat", item_number: null, width: 3840, height: 2160, available: true, url: url("cc"), head: null },
+    ],
+    files: [],
+  },
+};
+
+test("--chapters=concat uploads the stitched rendering as one clip", () => {
+  const s = selectAssets(row({ item_count: 2 }), CHAPTERED, { chapters: "concat" });
+  assert.equal(s.assets.length, 1);
+  assert.equal(s.assets[0]?.label, "concat");
+  assert.ok(s.warning?.includes("re-render"), "must warn that metadata may differ");
+});
+
+test("--chapters=concat falls back to split when no concat exists", () => {
+  const noConcat: DownloadManifest = {
+    _embedded: { variations: (CHAPTERED._embedded.variations ?? []).filter((v) => v.label !== "concat"), files: [] },
+  };
+  const s = selectAssets(row({ item_count: 2 }), noConcat, { chapters: "concat" });
+  assert.equal(s.assets.length, 2, "must not silently drop chapters");
+  assert.ok(s.warning?.includes("no \"concat\""));
+});
+
+test("split remains the default for chaptered media", () => {
+  assert.equal(selectAssets(row({ item_count: 2 }), CHAPTERED).assets.length, 2);
+});
+
+test("--variant forces a specific label and flags proxies as degraded", () => {
+  const s = selectAssets(row(), VIDEO, { variant: "high_res_proxy_mp4" });
+  assert.equal(s.assets[0]?.label, "high_res_proxy_mp4");
+  assert.equal(s.assets[0]?.degraded, true);
+  assert.ok(s.warning?.includes("capture date"));
+});
+
+test("--variant=source is not treated as degraded", () => {
+  const s = selectAssets(row(), VIDEO, { variant: "source" });
+  assert.equal(s.assets[0]?.degraded, false);
+  assert.equal(s.warning, null);
+});
+
+test("--variant skips cleanly when the label is absent", () => {
+  const s = selectAssets(row(), VIDEO, { variant: "does_not_exist" });
+  assert.equal(s.skip, "no-downloadable-asset");
+  assert.equal(s.assets.length, 0);
+});
