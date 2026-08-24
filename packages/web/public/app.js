@@ -10,6 +10,8 @@ const $ = (id) => document.getElementById(id);
 
 const state = {
   rows: [],
+  /** Ids the user has ticked. Empty means "everything transferable". */
+  picked: new Set(),
   goproConnected: false,
   googleConnected: false,
   /** Assumed uplink for the estimate. Upload is the bottleneck, not download. */
@@ -141,8 +143,7 @@ async function refreshState() {
 }
 
 function updateStartButton() {
-  const ready = state.goproConnected && state.googleConnected &&
-    state.rows.some((r) => !r.skip);
+  const ready = state.goproConnected && state.googleConnected && chosen().length > 0;
   $("btn-start").disabled = !ready;
 }
 
@@ -153,6 +154,8 @@ async function scan() {
   btn.disabled = true; btn.textContent = "Scanning…";
   try {
     state.rows = await api("/api/library", filters());
+    // Default to everything transferable; the user narrows from there.
+    state.picked = new Set(state.rows.filter((r) => !r.skip).map((r) => r.id));
     renderLibrary();
   } catch (err) {
     alert(`Scan failed: ${err.message}`);
@@ -161,27 +164,51 @@ async function scan() {
   }
 }
 
-function renderLibrary() {
-  const usable = state.rows.filter((r) => !r.skip);
-  const skipped = state.rows.filter((r) => r.skip);
-  const total = usable.reduce((n, r) => n + r.bytes, 0);
+/** Rows that will actually transfer, honouring both skips and the tick boxes. */
+function chosen() {
+  return state.rows.filter((r) => !r.skip && state.picked.has(r.id));
+}
 
-  $("s-count").textContent = String(usable.length);
+function renderLibrary() {
+  const skipped = state.rows.filter((r) => r.skip);
+  const sel = chosen();
+  const total = sel.reduce((n, r) => n + r.bytes, 0);
+
+  $("s-count").textContent = String(sel.length);
   $("s-size").textContent = bytes(total);
   $("s-eta").textContent = estimate(total);
   $("s-skip").textContent = String(skipped.length);
 
-  $("lib-rows").innerHTML = state.rows.slice(0, 400).map((r) => `
-    <tr>
+  const shown = state.rows.slice(0, 400);
+  $("lib-rows").innerHTML = shown.map((r) => {
+    const on = state.picked.has(r.id);
+    return `
+    <tr class="${on ? "picked" : ""}" data-id="${escapeHtml(r.id)}">
+      <td><input type="checkbox" data-pick="${escapeHtml(r.id)}" ${on ? "checked" : ""} ${r.skip ? "disabled" : ""}></td>
       <td class="muted">${(r.capturedAt ?? "").slice(0, 16).replace("T", " ")}</td>
       <td>${escapeHtml(r.filename)}</td>
       <td class="muted">${escapeHtml(r.type)}</td>
       <td class="num">${bytes(r.bytes)}</td>
       <td class="${r.skip ? "warn" : "muted"}">${r.skip ? escapeHtml(r.skip) : ""}</td>
-    </tr>`).join("");
+    </tr>`;
+  }).join("");
+
+  const usable = state.rows.filter((r) => !r.skip).length;
+  $("sel-count").textContent = `${sel.length} of ${usable} selected` +
+    (state.rows.length > shown.length ? ` · showing first ${shown.length} of ${state.rows.length}` : "");
+  $("sel-head").checked = sel.length > 0 && sel.length === usable;
+  $("sel-head").indeterminate = sel.length > 0 && sel.length < usable;
 
   $("lib-wrap").classList.remove("hidden");
   updateStartButton();
+}
+
+function pick(mode) {
+  const usable = state.rows.filter((r) => !r.skip);
+  if (mode === "all") for (const r of usable) state.picked.add(r.id);
+  else if (mode === "none") state.picked.clear();
+  else for (const r of usable) state.picked.has(r.id) ? state.picked.delete(r.id) : state.picked.add(r.id);
+  renderLibrary();
 }
 
 const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) =>
@@ -201,11 +228,16 @@ async function start() {
     if (!body.toAlbum) { alert("Pick an album."); return; }
   }
 
-  const usable = state.rows.filter((r) => !r.skip);
+  const sel = chosen();
+  if (sel.length === 0) { alert("Nothing selected."); return; }
+  // Send explicit ids so the server transfers the selection, not the filter.
+  body.ids = sel.map((r) => r.id);
+
+  const size = sel.reduce((n, r) => n + r.bytes, 0);
   const label = mode === "root" ? "your Google Photos library" : `“${body.newAlbum ?? $("d-existing").selectedOptions[0]?.text}”`;
   const ok = confirm(
-    `Transfer ${usable.length} items (${bytes(usable.reduce((n, r) => n + r.bytes, 0))}) into ${label}?\n\n` +
-    `Estimated ${estimate(usable.reduce((n, r) => n + r.bytes, 0))}.\n\n` +
+    `Transfer ${sel.length} items (${bytes(size)}) into ${label}?\n\n` +
+    `Estimated ${estimate(size)}.\n\n` +
     `This cannot be undone from here — the Google Photos API has no delete capability.`);
   if (!ok) return;
 
@@ -244,12 +276,46 @@ function renderJob(job) {
   if (job.phase === "done" || job.phase === "failed") {
     $("btn-start").disabled = false;
     refreshState().catch(() => {});
+    loadHistory();
   }
 }
 
 // ---- wiring -------------------------------------------------------------- //
 
+async function loadHistory() {
+  try {
+    const h = await api("/api/history");
+    if (h.recent.length === 0 && h.albums.length === 0) return;
+    const verified = h.recent.filter((r) => r.state === "verified");
+    const bytesDone = h.days.reduce((n, d) => n + Number(d.bytes ?? 0), 0);
+    $("hist-stats").innerHTML = `
+      <div class="stat"><div class="k">Transferred</div><div class="v accent">${verified.length}</div></div>
+      <div class="stat"><div class="k">Total moved</div><div class="v">${bytes(bytesDone)}</div></div>
+      <div class="stat"><div class="k">Albums made</div><div class="v">${h.albums.length}</div></div>
+      <div class="stat"><div class="k">Skipped</div><div class="v">${h.recent.filter((r) => r.state === "skipped").length}</div></div>`;
+    $("hist-rows").innerHTML = h.recent.slice(0, 120).map((r) => `
+      <tr>
+        <td class="muted">${(r.finishedAt ?? "").slice(0, 16).replace("T", " ")}</td>
+        <td>${escapeHtml(r.filename)}</td>
+        <td class="${r.state === "verified" ? "ok" : r.state === "skipped" ? "warn" : "bad"}">${escapeHtml(r.state)}${r.error ? ` — ${escapeHtml(r.error.slice(0, 60))}` : ""}</td>
+        <td class="num">${bytes(r.bytes)}</td>
+      </tr>`).join("");
+    $("hist-panel").classList.remove("hidden");
+  } catch { /* history is optional context, never a blocker */ }
+}
+
 $("btn-scan").addEventListener("click", scan);
+$("sel-all").addEventListener("click", () => pick("all"));
+$("sel-none").addEventListener("click", () => pick("none"));
+$("sel-invert").addEventListener("click", () => pick("invert"));
+$("sel-head").addEventListener("change", (e) => pick(e.target.checked ? "all" : "none"));
+// Delegated so re-rendering the table does not orphan listeners.
+$("lib-rows").addEventListener("change", (e) => {
+  const id = e.target?.dataset?.pick;
+  if (!id) return;
+  e.target.checked ? state.picked.add(id) : state.picked.delete(id);
+  renderLibrary();
+});
 $("btn-start").addEventListener("click", start);
 $("d-mode").addEventListener("change", () => {
   const m = $("d-mode").value;
@@ -263,6 +329,7 @@ new EventSource("/api/events").onmessage = (e) => {
 
 (async function boot() {
   await refreshState();
+  loadHistory();
   // Populate the pickers, but a failure here must not blank the whole page.
   try {
     const albums = await api("/api/gopro/albums");

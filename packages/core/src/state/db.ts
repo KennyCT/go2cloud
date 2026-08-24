@@ -277,6 +277,39 @@ export class Store {
     return row.b;
   }
 
+  /** Recently finished transfers, newest first, for the history view. */
+  recentTransfers(limit = 100): Array<{
+    gopro_media_id: string; item_number: number; state: string;
+    google_media_item_id: string | null; finished_at: string | null;
+    filename: string | null; bytes_total: number; last_error: string | null;
+  }> {
+    return this.db
+      .prepare(`
+        SELECT t.gopro_media_id, t.item_number, t.state, t.google_media_item_id,
+               t.finished_at, m.filename, t.bytes_total, t.last_error
+        FROM transfers t
+        LEFT JOIN gopro_media m ON m.id = t.gopro_media_id
+        WHERE t.finished_at IS NOT NULL
+        ORDER BY t.finished_at DESC
+        LIMIT ?
+      `)
+      .all(limit) as never;
+  }
+
+  /** Per-day totals of completed work, for a compact history summary. */
+  transferDays(): Array<{ day: string; items: number; bytes: number }> {
+    return this.db
+      .prepare(`
+        SELECT substr(t.finished_at, 1, 10) AS day,
+               COUNT(*) AS items,
+               COALESCE(SUM(t.bytes_total), 0) AS bytes
+        FROM transfers t
+        WHERE t.state = 'verified' AND t.finished_at IS NOT NULL
+        GROUP BY day ORDER BY day DESC LIMIT 30
+      `)
+      .all() as never;
+  }
+
   // ---- google albums ---------------------------------------------------- //
 
   rememberGoogleAlbum(id: string, title: string): void {

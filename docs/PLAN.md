@@ -778,7 +778,7 @@ handle the failure gracefully rather than trusting either number.
 | M4 | **Streaming engine** — single-request upload, mid-file re-resolve, resume | |
 | M5 | Batching, concurrency, albums, pre-flight, verification, chapters | ✅ done |
 | M6 | Docker image | next |
-| M7 | Web UI + cosmic theme | 🛠 in progress — dashboard, scan, transfer, live progress |
+| M7 | Web UI + cosmic theme | ✅ done — dashboard, selection, live progress, history |
 | M8 | Public release: docs, disclaimers, published package | |
 
 ---

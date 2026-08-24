@@ -158,6 +158,27 @@ export async function createServer(opts: ServerOptions = {}): Promise<FastifyIns
 
   app.get("/api/gopro/albums", async () => new GoProClient().albumList());
 
+  app.get("/api/history", async () => {
+    const store = new Store(defaultDbPath(profile));
+    try {
+      const albums = store.googleAlbums();
+      return {
+        days: store.transferDays(),
+        albums,
+        recent: store.recentTransfers(120).map((t) => ({
+          id: `${t.gopro_media_id}#${t.item_number}`,
+          filename: t.filename ?? t.gopro_media_id,
+          state: t.state,
+          bytes: t.bytes_total,
+          finishedAt: t.finished_at,
+          error: t.last_error,
+        })),
+      };
+    } finally {
+      store.close();
+    }
+  });
+
   app.get("/api/google/albums", async () => {
     const albums = await new GooglePhotosClient(profile).listAlbums();
     return albums.filter((a) => a.writeable);

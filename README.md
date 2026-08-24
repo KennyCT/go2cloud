@@ -82,8 +82,8 @@ footage end to end; what remains is distribution and polish.
 | M3 | Google OAuth setup + multi-account profiles | ✅ Done |
 | M4 | Streaming transfer engine | ✅ Done |
 | M5 | Batching, pre-flight, resume, verify, chapters | ✅ Done |
-| **M7** | **Web UI (cosmic theme)** | 🛠 **In progress** — dashboard works; selection and history still to come |
-| M6 | Docker image for unattended runs | ⏳ Next |
+| M7 | Web UI (cosmic theme) | ✅ Done — dashboard, selection, live progress, history |
+| **M6** | **Docker image for unattended runs** | ⏳ **Next** |
 | M8 | Public release: npm package, docs, CI | ⏳ |
 
 **Proven in real use:** a single run moved **61 items / 65 GB in 4h 14m** with zero failures,
@@ -284,9 +284,10 @@ go2cloud ui                      # → http://127.0.0.1:4173
 go2cloud --profile real ui       # a specific connected account
 ```
 
-The same engine behind a dashboard: connection status, date/type/album filters, a scannable
-media table with a live size and duration estimate, destination picker, and per-file transfer
-progress streamed over server-sent events.
+The same engine behind a dashboard: connection status, date/type/album filters, a scannable media
+table with per-item selection, a live size and duration estimate that follows what you've ticked,
+destination picker, per-file progress streamed over server-sent events, and a history of past
+transfers.
 
 It binds to **loopback only** and holds no credentials of its own — authentication still happens
 in the terminal, through the OS keychain. There is no login screen because there is nothing on
