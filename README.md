@@ -70,26 +70,29 @@ media library. See [Legal & disclaimer](#legal--disclaimer).
 
 ## Project status
 
-🚧 **In active development — not yet usable.** Research and planning are complete; the engine
-is being built.
+🚧 **Working, but not yet packaged for other people.** The pipeline has moved 65 GB of real
+footage end to end; what remains is distribution and polish.
 
 | Milestone | What it delivers | Status |
 | --- | --- | --- |
 | M0 | Repo scaffold, toolchain, license | ✅ Done |
-| M0.5 | API research + live API probe | ✅ Done — 24 of 26 questions settled |
-| M1 | GoPro auth (browser login + token refresh) | ⏳ Next |
-| M2 | Library scan, filtering, album listing | ⏳ |
-| M3 | Google OAuth setup wizard | ⏳ |
-| M4 | Streaming transfer engine | ⏳ |
-| M5 | Batching, pre-flight, resume, chapters | ⏳ |
-| M6 | Docker image | ⏳ |
-| M7 | Web UI (cosmic theme) | ⏳ |
-| M8 | Public release | ⏳ |
+| M0.5 | API research + live probes | ✅ Done — 24 of 26 questions settled |
+| M1 | GoPro auth (browser login, OS keychain) | ✅ Done |
+| M2 | Library scan, filtering, album listing | ✅ Done |
+| M3 | Google OAuth setup + multi-account profiles | ✅ Done |
+| M4 | Streaming transfer engine | ✅ Done |
+| M5 | Batching, pre-flight, resume, verify, chapters | ✅ Done |
+| **M7** | **Web UI (cosmic theme)** | 🛠 **In progress** — dashboard works; selection and history still to come |
+| M6 | Docker image for unattended runs | ⏳ Next |
+| M8 | Public release: npm package, docs, CI | ⏳ |
 
-The only runnable piece today is the **read-only API probe** — see
-[Running the probe](#running-the-probe).
+**Proven in real use:** a single run moved **61 items / 65 GB in 4h 14m** with zero failures,
+capture dates preserved exactly, and three files over 5 GB rescued mid-upload when their GoPro
+download URLs expired. **39 tests** cover the paths that fail silently rather than loudly.
 
----
+Two questions remain open, both tracked in [`docs/PLAN.md` §11](docs/PLAN.md#11-live-probe-checklist):
+whether Google refresh tokens survive past day 7 for an unverified Production app (verdict due
+31 August 2026), and the real video size cap.
 
 ## Requirements
 
@@ -277,10 +280,17 @@ go2cloud verify     # confirm items landed in Google Photos
 ### Web UI
 
 ```bash
-go2cloud ui     # → http://localhost:4173
+go2cloud ui                      # → http://127.0.0.1:4173
+go2cloud --profile real ui       # a specific connected account
 ```
 
-Same engine, with a browsable media grid, filters, and live transfer progress.
+The same engine behind a dashboard: connection status, date/type/album filters, a scannable
+media table with a live size and duration estimate, destination picker, and per-file transfer
+progress streamed over server-sent events.
+
+It binds to **loopback only** and holds no credentials of its own — authentication still happens
+in the terminal, through the OS keychain. There is no login screen because there is nothing on
+the network to protect.
 
 ---
 

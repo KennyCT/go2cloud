@@ -1,24 +1,21 @@
 {
-  "name": "go2cloud",
+  "name": "@go2cloud/web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": {
-    "go2cloud": "./dist/main.js"
-  },
-  "engines": {
-    "node": ">=22.5"
-  },
+  "main": "./dist/server.js",
+  "types": "./dist/server.d.ts",
+  "exports": { ".": "./dist/server.js" },
+  "engines": { "node": ">=22.5" },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.json && node --test dist/**/*.test.js"
+    "test": "node --test"
   },
   "dependencies": {
     "@go2cloud/core": "workspace:*",
-    "commander": "^14.0.1",
-    "playwright": "^1.62.1",
-    "@go2cloud/web": "workspace:*"
+    "fastify": "^5.6.1",
+    "@fastify/static": "^8.2.0"
   },
   "devDependencies": {
     "@types/node": "^24.7.0",

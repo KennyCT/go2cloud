@@ -460,6 +460,21 @@ program
 
 
 program
+  .command("ui")
+  .description("open the web dashboard")
+  .option("--port <n>", "port to listen on", "4173")
+  .option("--no-open", "do not launch a browser")
+  .action(async function (this: Command, o: { port: string; open?: boolean }) {
+    const profile = profileOf(this);
+    const { startServer } = await import("@go2cloud/web");
+    const url = await startServer({ profile, port: Number(o.port) });
+    out(`go2cloud is running at ${url}`);
+    out(`Bound to loopback only — nothing on your network can reach it.`);
+    out(`Press Ctrl-C to stop.`);
+    if (o.open !== false) openBrowser(url);
+  });
+
+program
   .command("resume")
   .description("continue transfers left unfinished by a previous run")
   .option("--concurrency <n>", "files in flight", "3")

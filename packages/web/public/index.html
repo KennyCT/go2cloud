@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en" data-theme="cosmic">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>go2cloud</title>
+<style>
+  :root {
+    --void:        #0a0618;
+    --void-2:      #131032;
+    --panel:       rgba(28, 22, 62, 0.55);
+    --panel-edge:  rgba(139, 92, 246, 0.22);
+    --ink:         #e9e6ff;
+    --ink-dim:     #a49dc8;
+    --ink-faint:   #6f679a;
+    --indigo:      #6366f1;
+    --violet:      #8b5cf6;
+    --cyan:        #22d3ee;
+    --rose:        #fb7185;
+    --amber:       #fbbf24;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { height: 100%; }
+
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    color: var(--ink);
+    background:
+      radial-gradient(1200px 800px at 15% -10%, rgba(99, 102, 241, 0.20), transparent 60%),
+      radial-gradient(1000px 700px at 90% 10%, rgba(139, 92, 246, 0.16), transparent 55%),
+      radial-gradient(900px 900px at 50% 110%, rgba(34, 211, 238, 0.10), transparent 60%),
+      linear-gradient(170deg, var(--void) 0%, var(--void-2) 100%);
+    background-attachment: fixed;
+    min-height: 100%;
+  }
+
+  /* Starfield sits behind everything and never intercepts clicks. */
+  #stars { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+
+  .shell { position: relative; z-index: 1; max-width: 1120px; margin: 0 auto; padding: 40px 24px 80px; }
+
+  header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 8px; }
+  h1 {
+    font-size: 30px; font-weight: 650; letter-spacing: -0.02em; margin: 0;
+    background: linear-gradient(100deg, var(--cyan), var(--violet) 55%, var(--indigo));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .sub { color: var(--ink-faint); font-size: 13px; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 16px;
+    padding: 22px 24px;
+    margin-top: 20px;
+    backdrop-filter: blur(14px) saturate(120%);
+    -webkit-backdrop-filter: blur(14px) saturate(120%);
+    box-shadow: 0 20px 50px -30px rgba(0, 0, 0, 0.9);
+  }
+  .panel h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--ink-faint); margin: 0 0 16px; font-weight: 600;
+  }
+
+  .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label { font-size: 11px; color: var(--ink-faint); letter-spacing: 0.06em; text-transform: uppercase; }
+
+  input, select {
+    background: rgba(10, 6, 24, 0.6);
+    border: 1px solid rgba(139, 92, 246, 0.25);
+    color: var(--ink); border-radius: 9px; padding: 9px 11px;
+    font-family: var(--sans); font-size: 14px; min-width: 150px;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.14); }
+
+  button {
+    background: linear-gradient(100deg, var(--indigo), var(--violet));
+    color: #fff; border: 0; border-radius: 9px; padding: 10px 18px;
+    font-family: var(--sans); font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: filter .15s ease, transform .1s ease;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.12); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.ghost { background: transparent; border: 1px solid var(--panel-edge); color: var(--ink-dim); }
+  button.danger { background: linear-gradient(100deg, #e11d48, var(--rose)); }
+
+  .pill { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink-dim); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-faint); }
+  .dot.on  { background: var(--cyan);  box-shadow: 0 0 10px var(--cyan); }
+  .dot.off { background: var(--rose); box-shadow: 0 0 10px rgba(251,113,133,.6); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th {
+    text-align: left; font-weight: 600; font-size: 11px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-faint);
+    padding: 8px 10px; border-bottom: 1px solid var(--panel-edge);
+  }
+  tbody td { padding: 8px 10px; border-bottom: 1px solid rgba(139,92,246,.08); }
+  tbody tr:hover { background: rgba(139, 92, 246, 0.07); }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .muted { color: var(--ink-faint); }
+  .warn  { color: var(--amber); }
+
+  .scroll { max-height: 340px; overflow: auto; border-radius: 10px; }
+  .scroll::-webkit-scrollbar { width: 10px; }
+  .scroll::-webkit-scrollbar-thumb { background: rgba(139,92,246,.3); border-radius: 10px; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
+  .stat { background: rgba(10,6,24,.45); border: 1px solid rgba(139,92,246,.14); border-radius: 12px; padding: 14px 16px; }
+  .stat .k { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--ink-faint); }
+  .stat .v { font-family: var(--mono); font-size: 21px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .stat .v.accent { color: var(--cyan); }
+
+  .bar { height: 7px; border-radius: 99px; background: rgba(10,6,24,.7); overflow: hidden; }
+  .bar > i {
+    display: block; height: 100%; border-radius: 99px;
+    background: linear-gradient(90deg, var(--indigo), var(--violet) 50%, var(--cyan));
+    transition: width .3s ease;
+  }
+
+  .flight { display: flex; flex-direction: column; gap: 12px; }
+  .flight .name { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; }
+  .flight .name span:last-child { font-family: var(--mono); color: var(--ink-faint); font-size: 12px; }
+
+  pre.log {
+    font-family: var(--mono); font-size: 12px; color: var(--ink-dim);
+    background: rgba(10,6,24,.55); border-radius: 10px; padding: 12px 14px;
+    max-height: 180px; overflow: auto; margin: 0; white-space: pre-wrap;
+  }
+
+  .notice {
+    border-left: 3px solid var(--amber); background: rgba(251,191,36,.07);
+    padding: 11px 14px; border-radius: 0 9px 9px 0; font-size: 13px; color: var(--ink-dim);
+  }
+  .notice.bad { border-left-color: var(--rose); background: rgba(251,113,133,.08); }
+
+  .hidden { display: none !important; }
+  a { color: var(--cyan); }
+</style>
+</head>
+<body>
+<canvas id="stars"></canvas>
+<div class="shell">
+  <header>
+    <h1>go2cloud</h1>
+    <span class="sub">GoPro Cloud → Google Photos</span>
+  </header>
+
+  <div class="panel">
+    <h2>Connections</h2>
+    <div class="row" style="gap:26px">
+      <span class="pill"><i class="dot" id="dot-gopro"></i><span id="txt-gopro">checking…</span></span>
+      <span class="pill"><i class="dot" id="dot-google"></i><span id="txt-google">checking…</span></span>
+      <span class="pill muted" id="txt-profile"></span>
+    </div>
+    <div id="auth-help" class="notice hidden" style="margin-top:14px"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Choose footage</h2>
+    <div class="row">
+      <div class="field"><label>Captured from</label><input type="date" id="f-from"></div>
+      <div class="field"><label>Captured to</label><input type="date" id="f-to"></div>
+      <div class="field"><label>Type</label>
+        <select id="f-type">
+          <option value="">All</option><option>Video</option><option>Photo</option>
+          <option>TimeLapseVideo</option><option>MultiClipEdit</option>
+        </select>
+      </div>
+      <div class="field"><label>GoPro album</label><select id="f-album"><option value="">Any</option></select></div>
+      <button id="btn-scan">Scan library</button>
+    </div>
+    <div id="lib-wrap" class="hidden" style="margin-top:18px">
+      <div class="stats" style="margin-bottom:14px">
+        <div class="stat"><div class="k">Items</div><div class="v" id="s-count">–</div></div>
+        <div class="stat"><div class="k">Total size</div><div class="v" id="s-size">–</div></div>
+        <div class="stat"><div class="k">Estimated</div><div class="v accent" id="s-eta">–</div></div>
+        <div class="stat"><div class="k">Skipped</div><div class="v" id="s-skip">–</div></div>
+      </div>
+      <div class="scroll"><table>
+        <thead><tr><th>Captured</th><th>File</th><th>Type</th><th class="num">Size</th><th>Note</th></tr></thead>
+        <tbody id="lib-rows"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <div class="panel" id="dest-panel">
+    <h2>Destination in Google Photos</h2>
+    <div class="row">
+      <div class="field"><label>Mode</label>
+        <select id="d-mode">
+          <option value="new">Create / add to a named album</option>
+          <option value="existing">An album go2cloud made earlier</option>
+          <option value="root">Library, no album</option>
+        </select>
+      </div>
+      <div class="field" id="d-new-wrap"><label>Album name</label><input id="d-new" placeholder="GoPro — January 2026"></div>
+      <div class="field hidden" id="d-existing-wrap"><label>Album</label><select id="d-existing"></select></div>
+      <button id="btn-start" disabled>Start transfer</button>
+    </div>
+    <div class="notice" style="margin-top:14px">
+      Uploads are stored at original quality and count against your Google storage.
+      <strong>The Google Photos API cannot delete anything</strong> — whatever transfers must be
+      removed by hand in the Photos app.
+    </div>
+  </div>
+
+  <div class="panel hidden" id="run-panel">
+    <h2>Transfer</h2>
+    <div class="stats" style="margin-bottom:16px">
+      <div class="stat"><div class="k">Status</div><div class="v" id="r-phase">–</div></div>
+      <div class="stat"><div class="k">Completed</div><div class="v accent" id="r-done">0</div></div>
+      <div class="stat"><div class="k">Failed</div><div class="v" id="r-failed">0</div></div>
+      <div class="stat"><div class="k">Elapsed</div><div class="v" id="r-elapsed">0m</div></div>
+    </div>
+    <div class="bar" style="margin-bottom:18px"><i id="r-bar" style="width:0%"></i></div>
+    <div class="flight" id="r-flight"></div>
+    <pre class="log" id="r-log" style="margin-top:16px"></pre>
+  </div>
+</div>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

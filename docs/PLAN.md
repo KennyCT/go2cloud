@@ -618,6 +618,15 @@ Tuning:  --concurrency N --chunk-policy single|chunked --chunk-size 256MB --chap
 **Connect** → **Library** (grid, filters, selection) → **Destination** → **Pre-flight** →
 **Transfer** (live progress over SSE) → **History**.
 
+⚠️ **Built without a bundler.** §4 specified Vite + React. In practice the UI is six views and a
+progress stream, which does not justify adding a build step, a framework and their toolchains to a
+tool distributed over `npx`. It is plain ES modules and CSS served by Fastify, with state in one
+object and progress over SSE. Revisit if the UI grows enough to need component reuse.
+
+The server binds to `127.0.0.1` only and has no authentication, deliberately: it holds no
+credentials of its own, reaching the OS keychain through the same core the CLI uses, and exposes
+no network surface to protect.
+
 **Cosmic theme:** deep-space gradient (`#0a0618` → `#131032`) with a subtle animated starfield,
 nebula blue/violet primaries (`#6366f1`, `#8b5cf6`), cyan accent (`#22d3ee`) for progress and
 success. Glassmorphic panels, monospace for byte counts and rates.
@@ -768,8 +777,8 @@ handle the failure gracefully rather than trusting either number.
 | M3 | Google BYO-OAuth wizard + loopback/PKCE + **U4/U18–U22 probes** | ✅ protocol suite done — U4 (dashboard) + U18 (day 8) pending |
 | M4 | **Streaming engine** — single-request upload, mid-file re-resolve, resume | |
 | M5 | Batching, concurrency, albums, pre-flight, verification, chapters | ✅ done |
-| M6 | Docker image | |
-| M7 | Web UI + cosmic theme | |
+| M6 | Docker image | next |
+| M7 | Web UI + cosmic theme | 🛠 in progress — dashboard, scan, transfer, live progress |
 | M8 | Public release: docs, disclaimers, published package | |
 
 ---
