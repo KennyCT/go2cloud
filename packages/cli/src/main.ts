@@ -280,6 +280,7 @@ withFilters(program.command("transfer").description("stream matching media into 
   .option("--dry-run", "show the plan and stop")
   .option("--yes", "skip the confirmation prompt")
   .option("--concurrency <n>", "files in flight", "3")
+  .option("--batch-size <n>", "uploads to accumulate before committing them", "10")
   .option("--limit <n>", "transfer at most N items (useful for a rehearsal)")
   .option("--min-size <mb>", "only items at least this many MB")
   .option("--max-size <mb>", "only items at most this many MB")
@@ -287,7 +288,7 @@ withFilters(program.command("transfer").description("stream matching media into 
   .option("--uplink <mbps>", "assumed upload speed, for the estimate only", "40")
   .action(async function (this: Command, o: Filters & {
     newAlbum?: string; toAlbum?: string; dryRun?: boolean; yes?: boolean;
-    concurrency: string; uplink: string; limit?: string; smallest?: boolean;
+    concurrency: string; uplink: string; limit?: string; smallest?: boolean; batchSize?: string;
     minSize?: string; maxSize?: string;
   }) {
     const profile = profileOf(this);
@@ -384,6 +385,7 @@ withFilters(program.command("transfer").description("stream matching media into 
     let lastLine = 0;
     const engine = new TransferEngine(gopro, google, store, {
       concurrency: Number(o.concurrency),
+      batchSize: o.batchSize ? Number(o.batchSize) : undefined,
       albumId,
       onLog: (m) => err(`  ! ${m}`),
       onProgress: (e) => {

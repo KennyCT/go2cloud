@@ -12,7 +12,7 @@
  */
 
 import {
-  GOPRO_URL_REFRESH_MARGIN_MS, GOPRO_URL_TTL_MS,
+  GOPRO_URL_REFRESH_MARGIN_MS, GOPRO_URL_TTL_MS, DEFAULT_CHUNK_GRANULARITY,
   SINGLE_REQUEST_MAX_BYTES, UPLOAD_CHUNK_BYTES, MAX_BATCH_ITEMS,
 } from "../index.js";
 import type { GoProClient } from "../gopro/client.js";
@@ -32,6 +32,17 @@ export interface EngineOptions {
   concurrency?: number | undefined;
   albumId?: string | null | undefined;
   chunkBytes?: number | undefined;
+  /**
+   * How many finished uploads to accumulate before calling batchCreate.
+   *
+   * Deliberately far below the API's 50-item maximum. An upload only becomes a
+   * visible media item at batchCreate, so anything sitting in this buffer is bytes
+   * already spent that a crash would waste. During a 4-hour run at the old default
+   * of 50, ~50 GB sat uncommitted for hours. Ten bounds that loss to minutes.
+   */
+  batchSize?: number | undefined;
+  /** Flush a partial batch after this long, so a slow tail is not held hostage. */
+  flushAfterMs?: number | undefined;
   onProgress?: ((e: ProgressEvent) => void) | undefined;
   onLog?: ((message: string) => void) | undefined;
 }
@@ -115,6 +126,23 @@ export class TransferEngine {
     let resolved = await this.resolveUrl(row, asset);
     const total = await this.probeSize(resolved);
 
+    // A session from a previous process may still be alive — Google keeps them for
+    // 7 days and its committed offset is authoritative. Resuming there turns a
+    // crash mid-way through a 20 GB file from a full re-upload into a few chunks.
+    let session: UploadSession | null = null;
+    let offset = 0;
+    const stored = this.store.resumableSession(row.id, asset.itemNumber);
+    if (stored && total > SINGLE_REQUEST_MAX_BYTES) {
+      const probe = await this.google.queryOffset({ url: stored.url, granularity: DEFAULT_CHUNK_GRANULARITY });
+      if (probe && probe.status === "active" && probe.committed < total) {
+        session = { url: stored.url, granularity: DEFAULT_CHUNK_GRANULARITY };
+        offset = probe.committed;
+        this.log(`Resuming ${filename} at ${offset} of ${total} bytes from a previous run`);
+      } else {
+        this.store.clearSession(row.id, asset.itemNumber);
+      }
+    }
+
     // Small files go in one request: fewer round trips, and Google recommends it.
     if (total <= SINGLE_REQUEST_MAX_BYTES) {
       this.store.setState(row.id, asset.itemNumber, "uploading");
@@ -126,12 +154,14 @@ export class TransferEngine {
     }
 
     // Large files stream in aligned chunks so a failure costs one chunk, not the file.
-    const session: UploadSession = await this.google.startSession(total, mime);
+    if (!session) {
+      session = await this.google.startSession(total, mime);
+      offset = 0;
+    }
     const aligned = Math.max(session.granularity, Math.floor(chunkBytes / session.granularity) * session.granularity);
     this.store.setState(row.id, asset.itemNumber, "uploading");
-    this.store.recordProgress(row.id, asset.itemNumber, 0, session.url);
+    this.store.recordProgress(row.id, asset.itemNumber, offset, session.url);
 
-    let offset = 0;
     let token: string | null = null;
 
     while (offset < total) {
@@ -186,13 +216,22 @@ export class TransferEngine {
   async run(tasks: TransferTask[]): Promise<{ created: number; skipped: number; failed: number }> {
     const concurrency = Math.max(1, this.opts.concurrency ?? 3);
     const albumId = this.opts.albumId ?? undefined;
+    // Never above the API maximum, and by default far below it — see batchSize.
+    const batchSize = Math.min(MAX_BATCH_ITEMS, Math.max(1, this.opts.batchSize ?? 10));
+    const flushAfterMs = this.opts.flushAfterMs ?? 120_000;
     const queue = [...tasks];
     const ready: Array<{ task: TransferTask; token: string; fileName: string }> = [];
+    let oldestReadyAt: number | null = null;
     let created = 0, skipped = 0, failed = 0;
 
+    const shouldFlush = () =>
+      ready.length >= batchSize ||
+      (ready.length > 0 && oldestReadyAt !== null && Date.now() - oldestReadyAt >= flushAfterMs);
+
     const flush = async (force: boolean) => {
-      while (ready.length >= (force ? 1 : MAX_BATCH_ITEMS)) {
-        const batch = ready.splice(0, MAX_BATCH_ITEMS);
+      while (force ? ready.length > 0 : shouldFlush()) {
+        const batch = ready.splice(0, batchSize);
+        oldestReadyAt = ready.length > 0 ? Date.now() : null;
         try {
           const results = await this.google.batchCreate(
             batch.map((b) => ({ uploadToken: b.token, fileName: b.fileName })),
@@ -224,7 +263,6 @@ export class TransferEngine {
           for (const b of batch) this.store.setState(b.task.row.id, b.task.asset.itemNumber, "pending", msg);
           failed += batch.length;
         }
-        if (!force) break;
       }
     };
 
@@ -237,6 +275,7 @@ export class TransferEngine {
         try {
           const token = await this.uploadAsset(task);
           ready.push({ task, token, fileName: row.filename ?? `${row.id}.bin` });
+          oldestReadyAt ??= Date.now();
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           this.store.setState(row.id, asset.itemNumber, "failed", msg);

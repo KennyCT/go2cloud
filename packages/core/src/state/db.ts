@@ -233,6 +233,22 @@ export class Store {
     return row?.state === "verified" || row?.state === "skipped";
   }
 
+  /** The stored resumable session for an asset, if one survived a previous run. */
+  resumableSession(mediaId: string, itemNumber: number): { url: string; bytesSent: number } | null {
+    const row = this.db
+      .prepare("SELECT upload_url, bytes_sent FROM transfers WHERE gopro_media_id=? AND item_number=?")
+      .get(mediaId, itemNumber) as { upload_url?: string | null; bytes_sent?: number } | undefined;
+    if (!row?.upload_url) return null;
+    return { url: row.upload_url, bytesSent: row.bytes_sent ?? 0 };
+  }
+
+  /** Forget a session that Google no longer recognises, so the next attempt starts clean. */
+  clearSession(mediaId: string, itemNumber: number): void {
+    this.db
+      .prepare("UPDATE transfers SET upload_url=NULL, bytes_sent=0 WHERE gopro_media_id=? AND item_number=?")
+      .run(mediaId, itemNumber);
+  }
+
   pending(limit = 500): TransferRow[] {
     return this.db
       .prepare(`

@@ -17,8 +17,9 @@ waiting, uploading the same bytes back, waiting again, then deleting the local c
 go2cloud collapses that into one streamed pass: **GoPro CDN → memory → Google Photos** in ~64 MB
 windows. The bytes still travel down and back up — no API on either side can avoid that — but
 they never touch disk, the two legs overlap instead of running one after the other, and the whole
-thing is unattended. It transfers files in parallel and resumes exactly where it left off after a
-crash, a closed laptop, or a dead Wi-Fi connection.
+thing is unattended. It transfers files in parallel and resumes after a crash, a closed laptop, or
+a dead Wi-Fi connection — large files continue from the last committed byte rather than starting
+again.
 
 | Use it when | Why |
 | --- | --- |
@@ -129,8 +130,10 @@ The only runnable piece today is the **read-only API probe** — see
 - **Chapters are handled correctly.** A long recording is *one* GoPro media id containing N
   chapter files. State is keyed on `(media_id, item_number)` so nothing is dropped, and
   `--chapters=concat` can instead upload GoPro's server-stitched version as one continuous clip.
-- **Resume is real.** Google's resumable sessions live 7 days and their committed offset is
-  authoritative, so an interrupted 20 GB upload continues rather than restarting.
+- **Resume is real, with one caveat.** Google's resumable sessions live 7 days and their committed
+  offset is authoritative, so an interrupted upload of a large file continues from where it stopped
+  rather than restarting. Files under 256 MB are sent in a single request and simply restart, which
+  costs seconds. Completed files are never re-sent either way.
 - **Idempotent re-runs.** A local SQLite map of `(media_id, item_number) → google_media_item_id`
   means running go2cloud twice transfers only what's new.
 

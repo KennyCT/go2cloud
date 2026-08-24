@@ -423,6 +423,10 @@ Every ranged GET after 60 minutes `403`s. Required behaviour:
    `(label, item_number)`, and continue the ranged GET at the current offset.
 4. The Google session is unaffected — its offset is authoritative and the session lives **7 days**
    (the upload *token*, once finalized, lives **24 hours**).
+5. **Persist the session URL and resume across process restarts.** On restart, query the stored
+   session: if Google still reports it `active`, continue from its committed offset instead of
+   re-sending. A 4-hour run proved the need — three files over 5 GB each outlived their download
+   URL and were rescued mid-flight, but a process crash would still have restarted them from zero.
 
 ### 7.3 Chunking — quota-free, so resume granularity is the only tradeoff
 
