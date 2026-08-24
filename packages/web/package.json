@@ -5,12 +5,16 @@
   "type": "module",
   "main": "./dist/server.js",
   "types": "./dist/server.d.ts",
-  "exports": { ".": "./dist/server.js" },
-  "engines": { "node": ">=22.5" },
+  "exports": {
+    ".": "./dist/server.js"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test"
+    "test": "tsc -p tsconfig.json && node --test dist/**/*.test.js"
   },
   "dependencies": {
     "@go2cloud/core": "workspace:*",
