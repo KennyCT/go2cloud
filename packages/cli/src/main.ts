@@ -138,7 +138,8 @@ auth
     else {
       try {
         await googleAuth.accessToken(profile);
-        out(`Google  : connected (profile "${profile}")`);
+        const days = (Date.now() - (gt.consentedAt ?? Date.now())) / 86_400_000;
+        out(`Google  : connected (profile "${profile}", consented ${days.toFixed(1)}d ago)`);
       } catch (e) {
         out(`Google  : token problem — ${e instanceof Error ? e.message : String(e)}`);
       }

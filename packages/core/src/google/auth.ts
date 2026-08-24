@@ -47,7 +47,16 @@ export interface GoogleTokens {
   accessToken: string;
   refreshToken: string | null;
   expiresAt: number;
-  obtainedAt: number;
+  /**
+   * When consent was granted — NOT when the access token was last refreshed.
+   *
+   * Google's 7-day expiry for apps in Testing runs from consent, so overwriting this
+   * on every refresh makes a week-old grant look minutes old and hides exactly the
+   * problem it would be used to diagnose.
+   */
+  consentedAt: number;
+  /** When the current access token was issued. */
+  refreshedAt: number;
 }
 
 /** Read a client_secret_*.json downloaded from the Cloud Console. */
@@ -86,11 +95,14 @@ export function forgetClient(): void {
 
 function store(body: Record<string, unknown>, fallbackRefresh: string | null, profile: string): GoogleTokens {
   const expiresIn = typeof body["expires_in"] === "number" ? body["expires_in"] : 3600;
+  const prior = readJson<GoogleTokens>(tokenKey(profile));
   const t: GoogleTokens = {
     accessToken: String(body["access_token"] ?? ""),
     refreshToken: typeof body["refresh_token"] === "string" ? body["refresh_token"] : fallbackRefresh,
     expiresAt: Date.now() + expiresIn * 1000,
-    obtainedAt: Date.now(),
+    // Preserved across refreshes; only a fresh consent resets it.
+    consentedAt: fallbackRefresh === null ? Date.now() : (prior?.consentedAt ?? Date.now()),
+    refreshedAt: Date.now(),
   };
   writeJson(tokenKey(profile), t);
   return t;
