@@ -16,6 +16,7 @@ import {
   GoProClient, GooglePhotosClient, Store, TransferEngine, defaultDbPath,
   goproAuth, googleAuth, selectAssets, selectPreview, previewKind, bytesOf, thumbnailUrl,
   mimeFor, GOPRO_URL_TTL_MS, GOPRO_URL_REFRESH_MARGIN_MS,
+  ORIGINAL_LABELS, PREVIEW_ORIGINAL_MAX_BYTES,
   type MediaRow, type PreviewAsset, type ProgressEvent, type TransferTask,
 } from "@go2cloud/core";
 
@@ -80,6 +81,23 @@ interface StreamEntry {
   asset: PreviewAsset;
 }
 
+/**
+ * Outcome of resolving a preview. `refused` is distinct from "nothing there": the
+ * caller shows the user why, which is the whole difference between a considered
+ * decline and a dead player.
+ */
+interface Resolution {
+  entry?: StreamEntry;
+  refused?: string;
+}
+
+const readableBytes = (n: number): string => {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = n, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+};
+
 function parseDate(s: string | undefined, endOfDay = false): Date | undefined {
   if (!s) return undefined;
   const iso = s.length === 10 ? `${s}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}Z` : s;
@@ -136,6 +154,18 @@ function loopbackOrigin(origin: string | undefined): boolean {
     return LOOPBACK.has(new URL(origin).hostname);
   } catch {
     return false;
+  }
+}
+
+/** Byte length of a signed CDN asset. Null when the CDN declines to say. */
+async function headSize(url: string): Promise<number | null> {
+  try {
+    const res = await fetch(url, { method: "HEAD" });
+    if (!res.ok) return null;
+    const len = Number(res.headers.get("content-length"));
+    return Number.isFinite(len) && len > 0 ? len : null;
+  } catch {
+    return null;
   }
 }
 
@@ -344,12 +374,12 @@ export async function createServer(opts: ServerOptions = {}): Promise<FastifyIns
    * could hand back a different rendition and splice two files together at the current
    * offset. The transfer engine pins the same way for the same reason (PLAN.md §7.2).
    */
-  async function resolveStream(id: string, pin?: PreviewAsset): Promise<StreamEntry | null> {
+  async function resolveStream(id: string, pin?: PreviewAsset): Promise<Resolution> {
     const row = rowsById.get(id);
-    if (!row) return null;
+    if (!row) return {};
     const manifest = await new GoProClient().downloadManifest(id);
     const chosen = selectPreview(row, manifest);
-    if (!chosen) return null;
+    if (!chosen) return {};
 
     let asset = chosen;
     if (pin && (chosen.label !== pin.label || chosen.itemNumber !== pin.itemNumber)) {
@@ -361,13 +391,27 @@ export async function createServer(opts: ServerOptions = {}): Promise<FastifyIns
           typeof v.url === "string" && v.url.length > 0,
       );
       // Refuse rather than splice: a truncated preview is recoverable, a corrupt one is confusing.
-      if (!same) return null;
+      if (!same) return {};
       asset = { ...pin, url: same.url as string };
+    }
+
+    // Falling back to an original means every second watched pulls full-quality bytes.
+    // The manifest carries no size, so ask the CDN — but only on this rare path, and
+    // only once per resolve, since seeking reuses the cached entry.
+    if ((ORIGINAL_LABELS as readonly string[]).includes(asset.label)) {
+      const size = await headSize(asset.url);
+      if (size !== null && size > PREVIEW_ORIGINAL_MAX_BYTES) {
+        return {
+          refused:
+            `GoPro has produced no preview rendition for this clip, and the original is ` +
+            `${readableBytes(size)} — previewing it would stream the full-quality file.`,
+        };
+      }
     }
 
     const entry = { url: asset.url, resolvedAt: Date.now(), asset };
     streamUrls.set(id, entry);
-    return entry;
+    return { entry };
   }
 
   /**
@@ -390,6 +434,12 @@ export async function createServer(opts: ServerOptions = {}): Promise<FastifyIns
       poster: thumbTokens.has(id) ? `/api/thumb/${encodeURIComponent(id)}` : null,
     };
 
+    // If it cannot be transferred there is nothing to decide, so there is nothing to
+    // preview — spending a manifest call and CDN bandwidth on it would be waste. The
+    // card still carries the reason on its face.
+    const skip = skipReason(row);
+    if (skip) return { kind: "none", note: `Not transferable — ${skip}.`, ...common };
+
     if (previewKind(row) === "photo") {
       if (!thumbTokens.has(id)) return { kind: "none", note: "GoPro has no preview for this item.", ...common };
       return {
@@ -401,8 +451,9 @@ export async function createServer(opts: ServerOptions = {}): Promise<FastifyIns
       };
     }
 
-    const entry = await resolveStream(id);
-    if (!entry) {
+    const resolved = await resolveStream(id);
+    if (resolved.refused) return { kind: "none", note: resolved.refused, ...common };
+    if (!resolved.entry) {
       return {
         kind: "none",
         note: row.ready_to_view && row.ready_to_view !== "ready"
@@ -411,13 +462,14 @@ export async function createServer(opts: ServerOptions = {}): Promise<FastifyIns
         ...common,
       };
     }
+    const { asset } = resolved.entry;
     return {
       kind: "video",
       src: `/api/stream/${encodeURIComponent(id)}`,
-      width: entry.asset.width,
-      height: entry.asset.height,
-      label: entry.asset.label,
-      chapters: entry.asset.chapters,
+      width: asset.width,
+      height: asset.height,
+      label: asset.label,
+      chapters: asset.chapters,
       durationMs: typeof row.source_duration === "number" ? row.source_duration : null,
       ...common,
     };
@@ -437,10 +489,17 @@ export async function createServer(opts: ServerOptions = {}): Promise<FastifyIns
     const id = req.params.id;
     const row = rowsById.get(id);
     if (!row) return reply.code(404).send({ error: "unknown media id — scan first" });
+    // Same gate as /api/preview, so the byte route cannot be reached around it.
+    const skipped = skipReason(row);
+    if (skipped) return reply.code(404).send({ error: `not transferable — ${skipped}` });
 
     let entry = streamUrls.get(id);
     const stale = entry && Date.now() - entry.resolvedAt >= GOPRO_URL_TTL_MS - GOPRO_URL_REFRESH_MARGIN_MS;
-    if (!entry || stale) entry = (await resolveStream(id, entry?.asset)) ?? undefined;
+    if (!entry || stale) {
+      const resolved = await resolveStream(id, entry?.asset);
+      if (resolved.refused) return reply.code(413).send({ error: resolved.refused });
+      entry = resolved.entry;
+    }
     if (!entry) return reply.code(404).send({ error: "no playable rendition for this item" });
 
     // Seeking abandons the previous request; without this the upstream fetch would
@@ -458,8 +517,8 @@ export async function createServer(opts: ServerOptions = {}): Promise<FastifyIns
       // 403 is how the CDN reports an expired signature; re-mint once and retry.
       if (res.status === 403 || res.status === 401) {
         const fresh = await resolveStream(id, entry.asset);
-        if (!fresh) return reply.code(502).send({ error: "preview URL expired and could not be renewed" });
-        res = await pull(fresh.url);
+        if (!fresh.entry) return reply.code(502).send({ error: "preview URL expired and could not be renewed" });
+        res = await pull(fresh.entry.url);
       }
     } catch (err) {
       if (abort.signal.aborted) return reply.hijack();

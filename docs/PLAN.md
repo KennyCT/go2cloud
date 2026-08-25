@@ -665,6 +665,20 @@ Four traps, each of which produced a real defect during review:
 Preview routes answer only for ids seen in the last scan. That is deliberate: it stops an
 unauthenticated loopback page from being able to make the server fetch arbitrary media ids.
 
+**If it cannot be transferred, it cannot be previewed.** A preview exists to inform a decision, and
+there is no decision to make about media Google Photos will not accept — so a skipped card carries
+its reason on its face and is otherwise inert. Both `/api/preview` and `/api/stream` enforce this,
+not just the UI, which also keeps a manifest call and CDN bandwidth from being spent on media
+nobody can move.
+
+**Preview streams a proxy, or an original small enough to pass for one.** Where GoPro has produced
+no proxy, the only playable rendition left is the original, and every second watched then pulls
+full-quality bytes. Past `PREVIEW_ORIGINAL_MAX_BYTES` (500 MB) preview declines and says the size,
+rather than quietly hammering a weak connection. The manifest carries no size, so this costs one
+`HEAD` — on the fallback path only, once per resolve, since seeking reuses the cached entry.
+Measured live 2026-08-24: **24 of 25 sampled videos had an `edit_proxy`**, and the one that did not
+was a Quik edit, which is untransferable and so never reaches this path at all.
+
 ⚠️ **Built without a bundler.** §4 specified Vite + React. In practice the UI is six views and a
 progress stream, which does not justify adding a build step, a framework and their toolchains to a
 tool distributed over `npx`. It is plain ES modules and CSS served by Fastify, with state in one
@@ -771,6 +785,16 @@ time they are hit:
 | U10 | How does `.360` present in `type` / `Content-Disposition`? | Skip on `file_extension == "360"`; log the full manifest if one is ever seen. |
 | U11 | Does a `concat` variation exist for every chaptered medium? | `--chapters=concat` must verify `concat` is present and fall back to `split` if not — never assume. |
 | U11b | Are chapters really N `source` variations keyed by `item_number`? | Every observed variation had `item_number: null` (all single-chapter). The composite PK in §6 stays — it is correct either way and costs nothing. |
+
+**Preview paths still waiting on media that does not exist in this account.** All three are
+handled defensively — the code is correct whichever way the answer falls — but none has been
+exercised against real bytes. Test each the first time such media appears:
+
+| # | Question | What to check when the media exists |
+| --- | --- | --- |
+| U23 | Does a `.360` medium publish a rectilinear mp4 proxy? | Open one in the viewer. If GoPro proxies it, `selectPreview` returns it and it plays; if not, the card is inert with its skip reason, since `.360` is untransferable and therefore unpreviewable. Either is correct — confirm which happens and record it here. |
+| U24 | Does a chaptered video expose per-chapter `edit_proxy` keyed by `item_number`? | Preview plays chapter 1 and the footer must read "chapter 1 of N" with N matching `item_count`. A wrong N means the label bucket in `selectPreview` is grouping unrelated renditions. |
+| U25 | Does the original-preview ceiling (§9.1) ever fire in practice? | Sampled live 2026-08-24: 24 of 25 videos had an `edit_proxy`; the one without was a Quik edit, which is untransferable and so never reaches the ceiling. Verified only against a synthetic 6 GB fixture. Watch for a real clip that GoPro has genuinely not proxied. |
 
 ### ✅ Google-side — settled by the protocol suite, 2026-08-23
 

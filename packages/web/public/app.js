@@ -222,9 +222,9 @@ function renderLibrary() {
       <div class="tick">✓</div>
       <div class="badge">${escapeHtml(r.type)}</div>
       ${r.skip ? `<div class="why">${escapeHtml(r.skip)}</div>` : ""}
-      <button class="play" data-preview="${escapeHtml(r.id)}"
+      ${r.skip ? "" : `<button class="play" data-preview="${escapeHtml(r.id)}"
         title="Preview ${escapeHtml(r.filename)}" aria-label="Preview ${escapeHtml(r.filename)}"
-        >${r.kind === "photo" ? "⤢" : "▶"}</button>
+        >${r.kind === "photo" ? "⤢" : "▶"}</button>`}
       <div class="meta"><b>${escapeHtml(r.filename)}</b><span>${len ? len + " · " : ""}${bytes(r.bytes)}</span></div>
     </div>`;
   }).join("");
@@ -236,8 +236,8 @@ function renderLibrary() {
     <tr class="${on ? "picked" : ""}" data-id="${escapeHtml(r.id)}">
       <td><input type="checkbox" data-pick="${escapeHtml(r.id)}" ${on ? "checked" : ""} ${r.skip ? "disabled" : ""}></td>
       <td class="muted">${(r.capturedAt ?? "").slice(0, 16).replace("T", " ")}</td>
-      <td><button class="peek" data-preview="${escapeHtml(r.id)}" title="Preview"
-        >${r.kind === "photo" ? "⤢" : "▶"}</button>${escapeHtml(r.filename)}</td>
+      <td>${r.skip ? "" : `<button class="peek" data-preview="${escapeHtml(r.id)}" title="Preview"
+        >${r.kind === "photo" ? "⤢" : "▶"}</button>`}${escapeHtml(r.filename)}</td>
       <td class="muted">${escapeHtml(r.type)}</td>
       <td class="num">${bytes(r.bytes)}</td>
       <td class="${r.skip ? "warn" : "muted"}">${r.skip ? escapeHtml(r.skip) : ""}</td>
@@ -482,9 +482,9 @@ function setView(v) {
 $("view-grid").addEventListener("click", () => setView("grid"));
 $("view-list").addEventListener("click", () => setView("list"));
 
-// Clicking a card toggles it; the play button opens the preview instead. Skipped
-// cards cannot be ticked but CAN be previewed — seeing why something is unusable is
-// the whole point of looking at it.
+// Clicking a card toggles it; the play button opens the preview instead. A card that
+// cannot be transferred has neither — there is no decision to make about it, so it
+// carries its reason on its face and is otherwise inert.
 $("lib-grid").addEventListener("click", (e) => {
   const peek = e.target.closest("[data-preview]");
   if (peek) { openPreview(peek.dataset.preview); return; }

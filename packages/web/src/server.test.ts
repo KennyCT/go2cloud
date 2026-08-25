@@ -8,6 +8,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { PREVIEW_ORIGINAL_MAX_BYTES } from "@go2cloud/core";
 import { createServer } from "./server.js";
 
 test("serves the dashboard", async () => {
@@ -91,6 +92,18 @@ test("refuses requests addressed to anything but localhost", async () => {
   assert.equal(own.statusCode, 200);
 
   await app.close();
+});
+
+/**
+ * A preview exists to inform a decision. There is no decision to make about media
+ * Google Photos will not accept, so it is not previewable — which also keeps the
+ * manifest call and the CDN bandwidth from being spent on it.
+ */
+test("the original-preview ceiling stays in proxy territory", () => {
+  // Sized against a live measurement: the largest proxy seen was 290 MB, for an
+  // 8.7 GB source. A ceiling below that would decline renditions that are fine.
+  assert.ok(PREVIEW_ORIGINAL_MAX_BYTES > 290 * 1024 * 1024, "must not undercut a real proxy");
+  assert.ok(PREVIEW_ORIGINAL_MAX_BYTES < 1024 * 1024 * 1024, "must stay well under a whole GB");
 });
 
 test("an unknown path 404s rather than falling through to the app shell", async () => {

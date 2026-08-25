@@ -91,7 +91,7 @@ moving it; what remains is distribution and polish.
 capture dates preserved exactly, and three files over 5 GB rescued mid-upload when their GoPro
 download URLs expired. Preview was measured against the same live account: a **5.7 GB clip plays
 and seeks having buffered ~23 seconds**, an 8.7 GB clip resolves to a 290 MB proxy, and all 81
-items in a date-range scan returned thumbnails. **53 tests** cover the paths that fail silently
+items in a date-range scan returned thumbnails. **56 tests** cover the paths that fail silently
 rather than loudly.
 
 Two questions remain open, both tracked in [`docs/PLAN.md` §11](docs/PLAN.md#11-live-probe-checklist):
@@ -322,9 +322,10 @@ committing gigabytes to it.
    own behaviour — click outside the video to get item navigation back.
 4. **Narrow the selection.** Scanning pre-ticks everything transferable and you cut from there —
    click a card to toggle it, or use **Select all / none / Invert**. Items Google Photos cannot
-   accept are dimmed with the reason on them and cannot be ticked, though you can still preview
-   them. The size and duration estimates follow your ticks, not the filter, so the numbers always
-   describe what will actually happen. **Grid** and **List** show the same selection.
+   accept are dimmed with the reason on their face and are inert: no tick box, and no preview,
+   since there is no decision to make about them. The size and duration estimates follow your
+   ticks, not the filter, so the numbers always describe what will actually happen. **Grid** and
+   **List** show the same selection.
 5. **Pick a destination** — a new or existing go2cloud album, or your library root. Remember that
    the API cannot touch albums you created by hand in the Photos app.
 6. **Start transfer**, confirm the pre-flight, and watch per-file progress stream in. Finished
@@ -335,10 +336,12 @@ response already carries the token that addresses them, so they add no API calls
 streamed a byte range at a time, so opening a 5.7 GB clip buffers a few seconds rather than
 downloading 5.7 GB, and the transfer still sends the untouched original either way.
 
-What you watch is normally GoPro's own 720p proxy. Where GoPro has produced no proxy, it falls
-back to the original — still ranged, so still only the part you actually watch — and the viewer
-names the rendition so you know which you are looking at. Anything with no playable rendition at
-all, such as a clip still transcoding, says so instead of showing a dead player.
+What you watch is normally GoPro's own 720p proxy — good enough to tell which clip is which, which
+is all preview is for. Where GoPro has produced no proxy, it falls back to the original only if
+that original is under 500 MB; past that it declines and tells you the size, rather than pulling
+full-quality bytes over a connection that may not want them. On a real 212-item library the
+fallback is rare: 24 of 25 sampled videos had a proxy. Anything with no playable rendition at all,
+such as a clip still transcoding, says so instead of showing a dead player.
 
 It binds to **loopback only** and holds no credentials of its own — authentication still happens
 in the terminal, through the OS keychain. There is no login screen because there is nothing on

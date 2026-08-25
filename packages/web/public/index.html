@@ -175,11 +175,9 @@
     background: rgba(6,4,16,.72); font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
     color: var(--ink-dim);
   }
-  /* Sits above the picture, but clear of the play button in the middle — a skipped
-     item is still worth looking at, which is often how you learn why it is skipped. */
-  .card .why { position: absolute; inset: 0; display: grid; place-items: center; align-items: end;
-    padding: 12px 12px 40px; text-align: center;
-    font-size: 12px; color: var(--amber); background: rgba(6,4,16,.55); }
+  /* An untransferable card has no play button, so the reason takes the middle. */
+  .card .why { position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
+    padding: 12px; font-size: 12px; color: var(--amber); background: rgba(6,4,16,.55); }
 
   /* Preview button. Always present for keyboard and touch; fades in on hover. */
   .card .play {
@@ -193,8 +191,6 @@
   }
   .card:hover .play, .card .play:focus-visible { opacity: 1; }
   .card .play:hover { background: var(--cyan); color: #06121a; border-color: var(--cyan); }
-  /* The card is not tickable, but the preview button on it still is. */
-  .card.skip .play { cursor: pointer; }
   @media (hover: none) { .card .play { opacity: .9; } }
 
   .peek {
