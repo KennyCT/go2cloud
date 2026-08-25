@@ -16,7 +16,24 @@ const state = {
   googleConnected: false,
   /** Assumed uplink for the estimate. Upload is the bottleneck, not download. */
   uplinkMbps: 40,
+  view: "grid",
 };
+
+/**
+ * Thumbnails load only when scrolled into view.
+ *
+ * A grid re-renders on every selection change, so eagerly setting src would refetch
+ * everything each time. The server caches bytes, but the browser would still redecode
+ * hundreds of images. Observing intersection keeps a 500-item scan cheap.
+ */
+const lazyImages = new IntersectionObserver((entries, obs) => {
+  for (const e of entries) {
+    if (!e.isIntersecting) continue;
+    const img = e.target;
+    if (img.dataset.src && !img.src) img.src = img.dataset.src;
+    obs.unobserve(img);
+  }
+}, { rootMargin: "300px" });
 
 // ---- formatting ---------------------------------------------------------- //
 
@@ -25,6 +42,14 @@ function bytes(n) {
   let v = Number(n) || 0, i = 0;
   while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
   return `${v.toFixed(v < 10 && i > 0 ? 2 : 0)} ${units[i]}`;
+}
+
+/** GoPro reports source_duration in milliseconds. */
+function clipLength(ms) {
+  if (!ms || !Number.isFinite(ms)) return "";
+  const total = Math.round(ms / 1000);
+  const m = Math.floor(total / 60), sec = total % 60;
+  return `${m}:${String(sec).padStart(2, "0")}`;
 }
 
 function duration(seconds) {
@@ -115,13 +140,18 @@ function filters() {
 
 async function refreshState() {
   const s = await api("/api/state");
-  state.goproConnected = s.gopro.connected;
   state.googleConnected = s.google.connected;
 
-  $("dot-gopro").className = `dot ${s.gopro.connected ? "on" : "off"}`;
-  $("txt-gopro").textContent = s.gopro.connected
-    ? `GoPro connected · roughly ${(s.gopro.expiresInMs / 3600000).toFixed(1)}h left`
-    : "GoPro not connected";
+  // A stored token past its own expiry is not a working session. GoPro only tells
+  // us for certain with a 401, so say "likely expired" rather than either lie.
+  const goproLive = s.gopro.connected && !s.gopro.stale;
+  state.goproConnected = goproLive;
+  $("dot-gopro").className = `dot ${goproLive ? "on" : "off"}`;
+  $("txt-gopro").textContent = !s.gopro.connected
+    ? "GoPro not connected"
+    : s.gopro.stale
+      ? "GoPro session likely expired — sign in again"
+      : `GoPro connected · roughly ${(s.gopro.expiresInMs / 3600000).toFixed(1)}h left`;
 
   $("dot-google").className = `dot ${s.google.connected ? "on" : "off"}`;
   $("txt-google").textContent = s.google.connected ? "Google Photos connected" : "Google Photos not connected";
@@ -129,7 +159,7 @@ async function refreshState() {
 
   const help = $("auth-help");
   const missing = [];
-  if (!s.gopro.connected) missing.push("go2cloud auth gopro");
+  if (!goproLive) missing.push("go2cloud auth gopro");
   if (!s.google.connected) missing.push(`go2cloud${s.profile === "default" ? "" : ` --profile ${s.profile}`} auth google`);
   if (missing.length) {
     help.className = "notice bad";
@@ -180,13 +210,34 @@ function renderLibrary() {
   $("s-skip").textContent = String(skipped.length);
 
   const shown = state.rows.slice(0, 400);
+
+  $("lib-grid").innerHTML = shown.map((r) => {
+    const on = state.picked.has(r.id);
+    const len = clipLength(r.durationMs);
+    return `
+    <div class="card ${on ? "picked" : ""} ${r.skip ? "skip" : ""}" data-id="${escapeHtml(r.id)}">
+      ${r.hasThumb
+        ? `<img class="shot" alt="${escapeHtml(r.filename)}" data-src="/api/thumb/${encodeURIComponent(r.id)}" loading="lazy">`
+        : `<div class="shot"></div>`}
+      <div class="tick">✓</div>
+      <div class="badge">${escapeHtml(r.type)}</div>
+      ${r.skip ? `<div class="why">${escapeHtml(r.skip)}</div>` : ""}
+      ${r.skip ? "" : `<button class="play" data-preview="${escapeHtml(r.id)}"
+        title="Preview ${escapeHtml(r.filename)}" aria-label="Preview ${escapeHtml(r.filename)}"
+        >${r.kind === "photo" ? "⤢" : "▶"}</button>`}
+      <div class="meta"><b>${escapeHtml(r.filename)}</b><span>${len ? len + " · " : ""}${bytes(r.bytes)}</span></div>
+    </div>`;
+  }).join("");
+  for (const img of document.querySelectorAll("#lib-grid img[data-src]")) lazyImages.observe(img);
+
   $("lib-rows").innerHTML = shown.map((r) => {
     const on = state.picked.has(r.id);
     return `
     <tr class="${on ? "picked" : ""}" data-id="${escapeHtml(r.id)}">
       <td><input type="checkbox" data-pick="${escapeHtml(r.id)}" ${on ? "checked" : ""} ${r.skip ? "disabled" : ""}></td>
       <td class="muted">${(r.capturedAt ?? "").slice(0, 16).replace("T", " ")}</td>
-      <td>${escapeHtml(r.filename)}</td>
+      <td>${r.skip ? "" : `<button class="peek" data-preview="${escapeHtml(r.id)}" title="Preview"
+        >${r.kind === "photo" ? "⤢" : "▶"}</button>`}${escapeHtml(r.filename)}</td>
       <td class="muted">${escapeHtml(r.type)}</td>
       <td class="num">${bytes(r.bytes)}</td>
       <td class="${r.skip ? "warn" : "muted"}">${r.skip ? escapeHtml(r.skip) : ""}</td>
@@ -213,6 +264,122 @@ function pick(mode) {
 
 const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---- preview viewer ------------------------------------------------------ //
+
+/**
+ * Seeing the footage before committing it.
+ *
+ * Video is streamed through the server rather than downloaded: the browser asks for
+ * byte ranges as the user scrubs, so opening a 4 GB clip costs a few seconds of
+ * buffer, not 4 GB. Nothing is cached to disk and nothing survives closing the panel.
+ */
+
+/** Index into the RENDERED grid, so the arrows walk exactly what the user can see. */
+let viewIndex = -1;
+/** One token per open, so a slow fetch for item A cannot paint over item B. */
+let previewToken = 0;
+
+const shownRows = () => state.rows.slice(0, 400);
+const viewerOpen = () => !$("viewer").classList.contains("hidden");
+const stage = (html) => { $("v-stage").innerHTML = html; };
+
+/** A <video> keeps pulling bytes until its src is gone — clearing it ends the stream. */
+function stopPlayback() {
+  const v = $("v-stage").querySelector("video");
+  if (!v) return;
+  v.pause();
+  v.removeAttribute("src");
+  v.load();
+}
+
+function paintPickButton(row) {
+  const btn = $("v-pick");
+  const on = state.picked.has(row.id);
+  btn.disabled = Boolean(row.skip);
+  btn.textContent = row.skip ? "Cannot transfer" : on ? "✓ Selected" : "Select";
+  btn.classList.toggle("pick-on", on && !row.skip);
+  btn.classList.toggle("ghost", !on || Boolean(row.skip));
+}
+
+async function renderPreview() {
+  const rows = shownRows();
+  const row = rows[viewIndex];
+  if (!row) { closePreview(); return; }
+  const mine = ++previewToken;
+
+  stopPlayback();
+  $("v-name").textContent = row.filename;
+  $("v-meta").textContent = [
+    (row.capturedAt ?? "").slice(0, 16).replace("T", " "),
+    clipLength(row.durationMs),
+    bytes(row.bytes),
+  ].filter(Boolean).join("  ·  ");
+  $("v-pos").textContent = `${viewIndex + 1} of ${rows.length}`;
+  $("v-note").textContent = "";
+  paintPickButton(row);
+  stage(`<div class="placeholder">Loading preview…</div>`);
+
+  let info;
+  try {
+    info = await api(`/api/preview/${encodeURIComponent(row.id)}`);
+  } catch (err) {
+    if (mine === previewToken) stage(`<div class="placeholder">Preview unavailable — ${escapeHtml(err.message)}</div>`);
+    return;
+  }
+  if (mine !== previewToken) return; // the user moved on while we were waiting
+
+  if (info.kind === "video") {
+    // The poster is the thumbnail already in cache, so there is a picture instantly
+    // while the first byte range is still in flight.
+    stage(`<video controls autoplay playsinline preload="metadata"
+      ${info.poster ? `poster="${escapeHtml(info.poster)}"` : ""}
+      src="${escapeHtml(info.src)}"></video>`);
+    const v = $("v-stage").querySelector("video");
+    v.addEventListener("error", () => {
+      if (mine === previewToken) stage(`<div class="placeholder">This clip would not play — GoPro may still be transcoding its preview.</div>`);
+    });
+    // Autoplay is routinely refused; the controls still work, so this is not an error.
+    v.play?.().catch(() => {});
+    // Say what is on screen: this is GoPro's preview rendition, not the file that
+    // will be uploaded, and nobody should judge quality from it.
+    $("v-note").textContent = info.chapters > 1
+      ? `GoPro preview rendition, chapter 1 of ${info.chapters} — the transfer sends the original.`
+      : "GoPro preview rendition — the transfer sends the original.";
+    if (info.label && info.label !== "edit_proxy") $("v-meta").textContent += `  ·  ${info.label}`;
+  } else if (info.kind === "photo") {
+    stage(`<img alt="${escapeHtml(row.filename)}" src="${escapeHtml(info.src)}">`);
+    $("v-note").textContent = "Full-size original from GoPro.";
+  } else {
+    stage(`<div class="placeholder">${escapeHtml(info.note ?? "No preview available.")}` +
+      (info.poster ? `<br><img style="margin-top:14px; max-height:40vh" src="${escapeHtml(info.poster)}" alt="">` : "") +
+      `</div>`);
+  }
+}
+
+async function openPreview(id) {
+  const idx = shownRows().findIndex((r) => r.id === id);
+  if (idx < 0) return;
+  viewIndex = idx;
+  $("viewer").classList.remove("hidden");
+  $("v-close").focus();
+  await renderPreview();
+}
+
+function closePreview() {
+  stopPlayback();
+  previewToken++; // orphan any fetch still in flight
+  stage("");
+  $("viewer").classList.add("hidden");
+  viewIndex = -1;
+}
+
+function stepPreview(delta) {
+  const rows = shownRows();
+  if (viewIndex < 0 || rows.length === 0) return;
+  viewIndex = (viewIndex + delta + rows.length) % rows.length;
+  renderPreview();
+}
 
 // ---- transfer ------------------------------------------------------------ //
 
@@ -305,6 +472,55 @@ async function loadHistory() {
 }
 
 $("btn-scan").addEventListener("click", scan);
+function setView(v) {
+  state.view = v;
+  $("view-grid").classList.toggle("on", v === "grid");
+  $("view-list").classList.toggle("on", v === "list");
+  $("grid-wrap").classList.toggle("hidden", v !== "grid");
+  $("list-wrap").classList.toggle("hidden", v !== "list");
+}
+$("view-grid").addEventListener("click", () => setView("grid"));
+$("view-list").addEventListener("click", () => setView("list"));
+
+// Clicking a card toggles it; the play button opens the preview instead. A card that
+// cannot be transferred has neither — there is no decision to make about it, so it
+// carries its reason on its face and is otherwise inert.
+$("lib-grid").addEventListener("click", (e) => {
+  const peek = e.target.closest("[data-preview]");
+  if (peek) { openPreview(peek.dataset.preview); return; }
+  const card = e.target.closest(".card");
+  if (!card || card.classList.contains("skip")) return;
+  const id = card.dataset.id;
+  state.picked.has(id) ? state.picked.delete(id) : state.picked.add(id);
+  renderLibrary();
+});
+
+$("lib-rows").addEventListener("click", (e) => {
+  const peek = e.target.closest("[data-preview]");
+  if (peek) openPreview(peek.dataset.preview);
+});
+
+$("v-pick").addEventListener("click", () => {
+  const row = shownRows()[viewIndex];
+  if (!row || row.skip) return;
+  state.picked.has(row.id) ? state.picked.delete(row.id) : state.picked.add(row.id);
+  paintPickButton(row);
+  renderLibrary(); // keep the grid behind the panel in step
+});
+$("v-prev").addEventListener("click", () => stepPreview(-1));
+$("v-next").addEventListener("click", () => stepPreview(1));
+for (const el of document.querySelectorAll("#viewer [data-close]")) {
+  el.addEventListener("click", closePreview);
+}
+document.addEventListener("keydown", (e) => {
+  if (!viewerOpen()) return;
+  if (e.key === "Escape") { closePreview(); return; }
+  // While the player has focus the arrows are its own seek controls; leave them be.
+  if (e.target?.tagName === "VIDEO") return;
+  if (e.key === "ArrowLeft") { e.preventDefault(); stepPreview(-1); }
+  if (e.key === "ArrowRight") { e.preventDefault(); stepPreview(1); }
+});
+
 $("sel-all").addEventListener("click", () => pick("all"));
 $("sel-none").addEventListener("click", () => pick("none"));
 $("sel-invert").addEventListener("click", () => pick("invert"));

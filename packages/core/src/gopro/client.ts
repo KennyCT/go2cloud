@@ -18,7 +18,22 @@ export const SEARCH_FIELDS = [
   "id", "type", "filename", "file_extension", "file_size", "width", "height",
   "captured_at", "captured_at_timezone", "created_at", "item_count",
   "available_labels", "mce_type", "play_as", "ready_to_view",
+  // Signed JWT that addresses this medium's thumbnail on GoPro's image CDN. Comes
+  // back with the search row, so previews cost no extra API calls (see thumbnailUrl).
+  "token", "source_duration",
 ].join(",");
+
+/**
+ * Thumbnail URL for a medium.
+ *
+ * GoPro's own media library fetches these from images-0{1..4}.gopro.com, sharded
+ * across four hosts. Only `450w` and `original` exist — other widths 404. The CDN
+ * requires the account's bearer token, so a browser cannot load these directly and
+ * they must be proxied by something that holds the credential.
+ */
+export function thumbnailUrl(token: string, shard = 0, size: "450w" | "original" = "450w"): string {
+  return `https://images-0${(shard % 4) + 1}.gopro.com/resize/${size}/${token}`;
+}
 
 export interface SearchFilter {
   /** Capture-date window. Send an explicit end-of-day — a zero-width range returns 0. */

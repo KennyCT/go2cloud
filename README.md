@@ -71,7 +71,8 @@ media library. See [Legal & disclaimer](#legal--disclaimer).
 ## Project status
 
 🚧 **Working, but not yet packaged for other people.** The pipeline has moved 65 GB of real
-footage end to end; what remains is distribution and polish.
+footage end to end, and the dashboard now plays your library back to you before you commit to
+moving it; what remains is distribution and polish.
 
 | Milestone | What it delivers | Status |
 | --- | --- | --- |
@@ -82,13 +83,16 @@ footage end to end; what remains is distribution and polish.
 | M3 | Google OAuth setup + multi-account profiles | ✅ Done |
 | M4 | Streaming transfer engine | ✅ Done |
 | M5 | Batching, pre-flight, resume, verify, chapters | ✅ Done |
-| M7 | Web UI (cosmic theme) | ✅ Done — dashboard, selection, live progress, history |
+| M7 | Web UI (cosmic theme) | ✅ Done — dashboard, thumbnail grid, video preview, selection, live progress, history |
 | **M6** | **Docker image for unattended runs** | ⏳ **Next** |
 | M8 | Public release: npm package, docs, CI | ⏳ |
 
 **Proven in real use:** a single run moved **61 items / 65 GB in 4h 14m** with zero failures,
 capture dates preserved exactly, and three files over 5 GB rescued mid-upload when their GoPro
-download URLs expired. **39 tests** cover the paths that fail silently rather than loudly.
+download URLs expired. Preview was measured against the same live account: a **5.7 GB clip plays
+and seeks having buffered ~23 seconds**, an 8.7 GB clip resolves to a 290 MB proxy, and all 81
+items in a date-range scan returned thumbnails. **56 tests** cover the paths that fail silently
+rather than loudly.
 
 Two questions remain open, both tracked in [`docs/PLAN.md` §11](docs/PLAN.md#11-live-probe-checklist):
 whether Google refresh tokens survive past day 7 for an unverified Production app (verdict due
@@ -171,8 +175,15 @@ go2cloud auth gopro
 
 Opens GoPro's real login page in an isolated browser window. **You** log in — including 2FA.
 Your password never passes through go2cloud; only the resulting token is captured, and it goes
-straight into your OS keychain. go2cloud then refreshes that token automatically, so this is a
-one-time step.
+straight into your OS keychain. The browser context is destroyed immediately afterwards.
+
+**Expect to repeat this roughly daily.** GoPro's web login is a server-side form POST that sets a
+cookie — it never calls their OAuth token endpoint, so there is no refresh token to capture and
+nothing go2cloud can renew on your behalf. Observed sessions last hours, not days. go2cloud
+watches for a refreshable token bundle during login and will use one if GoPro ever starts issuing
+it, but on every login observed so far the cookie is all there is. The only route to a
+self-renewing token is the password grant, which would mean handling your GoPro password — so
+this project does not do it. Re-run the command whenever something reports a `401`.
 
 ### 2. Connect Google Photos
 
@@ -280,14 +291,57 @@ go2cloud verify     # confirm items landed in Google Photos
 ### Web UI
 
 ```bash
-go2cloud ui                      # → http://127.0.0.1:4173
-go2cloud --profile real ui       # a specific connected account
+go2cloud ui                        # → http://127.0.0.1:4173, opens your browser
+go2cloud ui --no-open              # start it, don't launch a browser
+go2cloud ui --port 8080            # somewhere other than 4173
+go2cloud --profile personal ui     # a specific connected account
 ```
 
-The same engine behind a dashboard: connection status, date/type/album filters, a scannable media
-table with per-item selection, a live size and duration estimate that follows what you've ticked,
-destination picker, per-file progress streamed over server-sent events, and a history of past
-transfers.
+The same engine behind a dashboard — and the only way to **see what you are about to move**.
+Filters alone are a CLI with extra steps; the point of the UI is that you can watch a clip before
+committing gigabytes to it.
+
+**Walking through a transfer**
+
+1. **Check the two status pills.** Both must be lit. The page cannot sign you in — by design, it
+   holds no credentials — so if GoPro reads *"session likely expired"*, run `go2cloud auth gopro`
+   in your terminal and reload.
+2. **Choose footage.** Set a capture-date range, a media type, or a GoPro album, then press
+   **Scan library**. Both date axes filter server-side, so narrowing a large library is cheap.
+3. **Look at it.** Every item shows its GoPro thumbnail. Press **▶** on a video or **⤢** on a
+   photo to open it full size.
+
+   | Key | Does |
+   | --- | --- |
+   | `←` `→` | previous / next item |
+   | `Esc` | close the viewer |
+   | **Select** button | tick the item without leaving the viewer |
+
+   Video plays and scrubs in place; photos open at full resolution. One quirk worth knowing:
+   while the player itself has focus the arrow keys seek *within* the clip, which is the browser's
+   own behaviour — click outside the video to get item navigation back.
+4. **Narrow the selection.** Scanning pre-ticks everything transferable and you cut from there —
+   click a card to toggle it, or use **Select all / none / Invert**. Items Google Photos cannot
+   accept are dimmed with the reason on their face and are inert: no tick box, and no preview,
+   since there is no decision to make about them. The size and duration estimates follow your
+   ticks, not the filter, so the numbers always describe what will actually happen. **Grid** and
+   **List** show the same selection.
+5. **Pick a destination** — a new or existing go2cloud album, or your library root. Remember that
+   the API cannot touch albums you created by hand in the Photos app.
+6. **Start transfer**, confirm the pre-flight, and watch per-file progress stream in. Finished
+   runs land in the **History** panel with per-day totals and the reason for anything skipped.
+
+**Previewing costs almost nothing.** Thumbnails ride along with the library scan — the search
+response already carries the token that addresses them, so they add no API calls. Video is
+streamed a byte range at a time, so opening a 5.7 GB clip buffers a few seconds rather than
+downloading 5.7 GB, and the transfer still sends the untouched original either way.
+
+What you watch is normally GoPro's own 720p proxy — good enough to tell which clip is which, which
+is all preview is for. Where GoPro has produced no proxy, it falls back to the original only if
+that original is under 500 MB; past that it declines and tells you the size, rather than pulling
+full-quality bytes over a connection that may not want them. On a real 212-item library the
+fallback is rare: 24 of 25 sampled videos had a proxy. Anything with no playable rendition at all,
+such as a clip still transcoding, says so instead of showing a dead player.
 
 It binds to **loopback only** and holds no credentials of its own — authentication still happens
 in the terminal, through the OS keychain. There is no login screen because there is nothing on
@@ -371,10 +425,16 @@ pnpm test
 ```
 packages/core/   engine — GoPro client, Google client, transfer pipeline, SQLite state
 packages/cli/    command-line interface
-packages/web/    React dashboard
+packages/web/    dashboard — Fastify server + plain ES modules, deliberately no bundler
 tools/           probe_gopro.py — read-only API probe
 docs/            PLAN.md (design + evidence) · PROBE.md
 ```
+
+The dashboard has **no build step and no framework** — it is six views and a progress stream,
+which does not justify adding a bundler and its toolchain to a tool meant to run over `npx`.
+Editing `packages/web/public/*` and reloading is the whole front-end workflow. See
+[`docs/PLAN.md` §9](docs/PLAN.md#9-web-ui) for why, and revisit if the UI ever needs component
+reuse.
 
 [`docs/PLAN.md`](docs/PLAN.md) is the design document and the reasoning behind every decision,
 including what was tried and rejected. Read it before making architectural changes — much of

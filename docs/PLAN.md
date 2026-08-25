@@ -615,8 +615,69 @@ Tuning:  --concurrency N --chunk-policy single|chunked --chunk-size 256MB --chap
 
 ## 9. Web UI
 
-**Connect** → **Library** (grid, filters, selection) → **Destination** → **Pre-flight** →
+**Connect** → **Library** (grid, filters, selection, preview) → **Destination** → **Pre-flight** →
 **Transfer** (live progress over SSE) → **History**.
+
+### 9.1 Seeing the footage — how preview works
+
+A library you cannot look at is a CLI with extra steps, so the grid shows real frames and any item
+opens full size. Three findings make this cheap:
+
+- **Thumbnails cost zero extra API calls.** `/media/search` already returns a `token` field — a
+  325-char signed JWT addressing the item on `images-0{1..4}.gopro.com/resize/{450w|original}/`.
+  Only `450w` and `original` exist; other widths 404. The image CDN requires
+  `Authorization: Bearer`, so the server proxies them and the page never sees a credential.
+  Measured live: **29 KB each, 1.7 MB for a 61-item grid, 259 ms for 12 in parallel.**
+- **Video is streamed, never downloaded.** `/media/{id}/download` lists transcodes GoPro made for
+  its own player. Preview takes the *cheapest* playable one — the inverse of `selectAssets`, which
+  insists on the original. `edit_proxy` is 720p; `high_res_proxy_mp4` matches source resolution
+  (2160p on a 4K clip), so the name is literal and it is **not** a 1080p proxy.
+- **Range requests pass straight through.** The browser asks for byte ranges as the user scrubs
+  and the server pipes them, so a 4 GB clip costs a socket and a buffer rather than 4 GB of RAM.
+
+Measured on a live account (2026-08-24): a **5.7 GB clip plays and seeks having buffered ~23 s**;
+an **8.7 GB clip resolves to a 290 MB proxy** (30×); a full-size still is 5568×4872 in 1.6 s; all
+81 items in a date-range scan returned thumbnails.
+
+Proxied rather than handing the signed URL to the page, for three separate reasons: the CDN answers
+`binary/octet-stream` for everything and browsers will not play that; a signed URL is a bearer
+credential for that file; and it expires in an hour (§7.2), which the page could not renew. The
+server re-mints on `403` mid-stream, exactly as the transfer engine does.
+
+Four traps, each of which produced a real defect during review:
+
+1. **MIME comes from the rendition's container, never the medium's filename.** A Quik edit is
+   named `*.json` while its `baked_source` is an mp4, and an older Hero clip is `*.MOV` while its
+   proxy is mp4 (§7.5). Typing the stream from the filename sends `application/octet-stream` — the
+   exact header the proxy exists to replace — and the player dies reporting a transcode problem
+   that does not exist. `PreviewAsset.container` carries it out.
+2. **Renewal must pin `(label, item_number)`.** The browser's offsets only mean anything against
+   the file it started with, so re-resolving on a `403` must land on the same rendition. If it has
+   genuinely vanished, refuse: a truncated preview is recoverable, a spliced one is baffling.
+3. **The scan cache is replaced, not accumulated.** Evicting oldest-first *while ingesting* a scan
+   larger than the cap discards the head of that same scan — precisely the rows the grid renders,
+   leaving every visible card's thumbnail healthy and every play button dead.
+4. **Loopback is not a boundary.** Any website can issue requests to `127.0.0.1`, and DNS
+   rebinding makes them same-origin. That was tolerable when the API exposed only metadata; serving
+   full-resolution photos and video bytes made it exfiltration. An `onRequest` hook requires a
+   loopback `Host` and, when present, a loopback `Origin` — neither of which a browser will forge.
+
+Preview routes answer only for ids seen in the last scan. That is deliberate: it stops an
+unauthenticated loopback page from being able to make the server fetch arbitrary media ids.
+
+**If it cannot be transferred, it cannot be previewed.** A preview exists to inform a decision, and
+there is no decision to make about media Google Photos will not accept — so a skipped card carries
+its reason on its face and is otherwise inert. Both `/api/preview` and `/api/stream` enforce this,
+not just the UI, which also keeps a manifest call and CDN bandwidth from being spent on media
+nobody can move.
+
+**Preview streams a proxy, or an original small enough to pass for one.** Where GoPro has produced
+no proxy, the only playable rendition left is the original, and every second watched then pulls
+full-quality bytes. Past `PREVIEW_ORIGINAL_MAX_BYTES` (500 MB) preview declines and says the size,
+rather than quietly hammering a weak connection. The manifest carries no size, so this costs one
+`HEAD` — on the fallback path only, once per resolve, since seeking reuses the cached entry.
+Measured live 2026-08-24: **24 of 25 sampled videos had an `edit_proxy`**, and the one that did not
+was a Quik edit, which is untransferable and so never reaches this path at all.
 
 ⚠️ **Built without a bundler.** §4 specified Vite + React. In practice the UI is six views and a
 progress stream, which does not justify adding a build step, a framework and their toolchains to a
@@ -725,6 +786,16 @@ time they are hit:
 | U11 | Does a `concat` variation exist for every chaptered medium? | `--chapters=concat` must verify `concat` is present and fall back to `split` if not — never assume. |
 | U11b | Are chapters really N `source` variations keyed by `item_number`? | Every observed variation had `item_number: null` (all single-chapter). The composite PK in §6 stays — it is correct either way and costs nothing. |
 
+**Preview paths still waiting on media that does not exist in this account.** All three are
+handled defensively — the code is correct whichever way the answer falls — but none has been
+exercised against real bytes. Test each the first time such media appears:
+
+| # | Question | What to check when the media exists |
+| --- | --- | --- |
+| U23 | Does a `.360` medium publish a rectilinear mp4 proxy? | Open one in the viewer. If GoPro proxies it, `selectPreview` returns it and it plays; if not, the card is inert with its skip reason, since `.360` is untransferable and therefore unpreviewable. Either is correct — confirm which happens and record it here. |
+| U24 | Does a chaptered video expose per-chapter `edit_proxy` keyed by `item_number`? | Preview plays chapter 1 and the footer must read "chapter 1 of N" with N matching `item_count`. A wrong N means the label bucket in `selectPreview` is grouping unrelated renditions. |
+| U25 | Does the original-preview ceiling (§9.1) ever fire in practice? | Sampled live 2026-08-24: 24 of 25 videos had an `edit_proxy`; the one without was a Quik edit, which is untransferable and so never reaches the ceiling. Verified only against a synthetic 6 GB fixture. Watch for a real clip that GoPro has genuinely not proxied. |
+
 ### ✅ Google-side — settled by the protocol suite, 2026-08-23
 
 Run against a throwaway account with Project A published to **Production, unverified**.
@@ -778,7 +849,7 @@ handle the failure gracefully rather than trusting either number.
 | M4 | **Streaming engine** — single-request upload, mid-file re-resolve, resume | |
 | M5 | Batching, concurrency, albums, pre-flight, verification, chapters | ✅ done |
 | M6 | Docker image | next |
-| M7 | Web UI + cosmic theme | ✅ done — dashboard, selection, live progress, history |
+| M7 | Web UI + cosmic theme | ✅ done — dashboard, thumbnail grid, video preview (§9.1), selection, live progress, history |
 | M8 | Public release: docs, disclaimers, published package | |
 
 ---

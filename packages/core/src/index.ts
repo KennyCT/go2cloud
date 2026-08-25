@@ -25,6 +25,23 @@ export const GOPRO_URL_REFRESH_MARGIN_MS = 60_000;
 /** Variation labels that denote an original rather than a proxy. PLAN.md §7.5. */
 export const ORIGINAL_LABELS = ["source", "baked_source"] as const;
 
+/**
+ * Ceiling on an ORIGINAL streamed as a preview.
+ *
+ * Preview normally streams one of GoPro's proxies, which are small by construction.
+ * Where GoPro has produced none, the only playable thing left is the original — and
+ * a peek at a 7 GB 4K file pulls full-quality bytes for every second watched. Ranged
+ * streaming bounds that by what you actually watch, not by the file size, but on a
+ * weak connection even a few seconds is painful, so past this size preview declines
+ * and says why rather than quietly hammering the link.
+ *
+ * Sized to be no worse than a large proxy: the biggest proxy measured on a live
+ * account was 290 MB (for an 8.7 GB source). Measured on that same account, the
+ * fallback is rare — 24 of 25 sampled videos had an `edit_proxy`, and the one that
+ * did not was a Quik edit, which is not transferable and so is not previewable.
+ */
+export const PREVIEW_ORIGINAL_MAX_BYTES = 500 * 1024 * 1024;
+
 /** Google rejects a whole batch if any fileName exceeds this. PLAN.md §7.6. */
 export const MAX_GOOGLE_FILENAME = 255;
 
@@ -58,6 +75,7 @@ export * as googleAuth from "./google/auth.js";
 
 export * from "./gopro/client.js";
 export * from "./gopro/errors.js";
+export * from "./gopro/preview.js";
 export * from "./gopro/selection.js";
 export * from "./gopro/types.js";
 export * from "./google/client.js";

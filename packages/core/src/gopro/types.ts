@@ -45,6 +45,8 @@ export const MediaRow = z
      * a boolean. Coercing it to a boolean silently yields false for every item.
      */
     ready_to_view: softStr,
+    token: softStr,
+    source_duration: softNum,
   })
   .loose();
 export type MediaRow = z.infer<typeof MediaRow>;
