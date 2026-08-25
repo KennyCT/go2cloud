@@ -58,6 +58,7 @@ export * as googleAuth from "./google/auth.js";
 
 export * from "./gopro/client.js";
 export * from "./gopro/errors.js";
+export * from "./gopro/preview.js";
 export * from "./gopro/selection.js";
 export * from "./gopro/types.js";
 export * from "./google/client.js";

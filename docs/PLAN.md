@@ -615,8 +615,55 @@ Tuning:  --concurrency N --chunk-policy single|chunked --chunk-size 256MB --chap
 
 ## 9. Web UI
 
-**Connect** → **Library** (grid, filters, selection) → **Destination** → **Pre-flight** →
+**Connect** → **Library** (grid, filters, selection, preview) → **Destination** → **Pre-flight** →
 **Transfer** (live progress over SSE) → **History**.
+
+### 9.1 Seeing the footage — how preview works
+
+A library you cannot look at is a CLI with extra steps, so the grid shows real frames and any item
+opens full size. Three findings make this cheap:
+
+- **Thumbnails cost zero extra API calls.** `/media/search` already returns a `token` field — a
+  325-char signed JWT addressing the item on `images-0{1..4}.gopro.com/resize/{450w|original}/`.
+  Only `450w` and `original` exist; other widths 404. The image CDN requires
+  `Authorization: Bearer`, so the server proxies them and the page never sees a credential.
+  Measured live: **29 KB each, 1.7 MB for a 61-item grid, 259 ms for 12 in parallel.**
+- **Video is streamed, never downloaded.** `/media/{id}/download` lists transcodes GoPro made for
+  its own player. Preview takes the *cheapest* playable one — the inverse of `selectAssets`, which
+  insists on the original. `edit_proxy` is 720p; `high_res_proxy_mp4` matches source resolution
+  (2160p on a 4K clip), so the name is literal and it is **not** a 1080p proxy.
+- **Range requests pass straight through.** The browser asks for byte ranges as the user scrubs
+  and the server pipes them, so a 4 GB clip costs a socket and a buffer rather than 4 GB of RAM.
+
+Measured on a live account (2026-08-24): a **5.7 GB clip plays and seeks having buffered ~23 s**;
+an **8.7 GB clip resolves to a 290 MB proxy** (30×); a full-size still is 5568×4872 in 1.6 s; all
+81 items in a date-range scan returned thumbnails.
+
+Proxied rather than handing the signed URL to the page, for three separate reasons: the CDN answers
+`binary/octet-stream` for everything and browsers will not play that; a signed URL is a bearer
+credential for that file; and it expires in an hour (§7.2), which the page could not renew. The
+server re-mints on `403` mid-stream, exactly as the transfer engine does.
+
+Four traps, each of which produced a real defect during review:
+
+1. **MIME comes from the rendition's container, never the medium's filename.** A Quik edit is
+   named `*.json` while its `baked_source` is an mp4, and an older Hero clip is `*.MOV` while its
+   proxy is mp4 (§7.5). Typing the stream from the filename sends `application/octet-stream` — the
+   exact header the proxy exists to replace — and the player dies reporting a transcode problem
+   that does not exist. `PreviewAsset.container` carries it out.
+2. **Renewal must pin `(label, item_number)`.** The browser's offsets only mean anything against
+   the file it started with, so re-resolving on a `403` must land on the same rendition. If it has
+   genuinely vanished, refuse: a truncated preview is recoverable, a spliced one is baffling.
+3. **The scan cache is replaced, not accumulated.** Evicting oldest-first *while ingesting* a scan
+   larger than the cap discards the head of that same scan — precisely the rows the grid renders,
+   leaving every visible card's thumbnail healthy and every play button dead.
+4. **Loopback is not a boundary.** Any website can issue requests to `127.0.0.1`, and DNS
+   rebinding makes them same-origin. That was tolerable when the API exposed only metadata; serving
+   full-resolution photos and video bytes made it exfiltration. An `onRequest` hook requires a
+   loopback `Host` and, when present, a loopback `Origin` — neither of which a browser will forge.
+
+Preview routes answer only for ids seen in the last scan. That is deliberate: it stops an
+unauthenticated loopback page from being able to make the server fetch arbitrary media ids.
 
 ⚠️ **Built without a bundler.** §4 specified Vite + React. In practice the UI is six views and a
 progress stream, which does not justify adding a build step, a framework and their toolchains to a
@@ -778,7 +825,7 @@ handle the failure gracefully rather than trusting either number.
 | M4 | **Streaming engine** — single-request upload, mid-file re-resolve, resume | |
 | M5 | Batching, concurrency, albums, pre-flight, verification, chapters | ✅ done |
 | M6 | Docker image | next |
-| M7 | Web UI + cosmic theme | ✅ done — dashboard, selection, live progress, history |
+| M7 | Web UI + cosmic theme | ✅ done — dashboard, thumbnail grid, video preview (§9.1), selection, live progress, history |
 | M8 | Public release: docs, disclaimers, published package | |
 
 ---

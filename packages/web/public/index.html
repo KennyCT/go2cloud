@@ -146,6 +146,95 @@
   }
   .notice.bad { border-left-color: var(--rose); background: rgba(251,113,133,.08); }
 
+  /* ---- media grid ---- */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
+  .card {
+    position: relative; border-radius: 12px; overflow: hidden; cursor: pointer;
+    background: rgba(10,6,24,.6); border: 1px solid rgba(139,92,246,.16);
+    transition: border-color .15s ease, transform .12s ease;
+  }
+  .card:hover { border-color: rgba(34,211,238,.5); transform: translateY(-2px); }
+  .card.picked { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan), 0 8px 24px -12px var(--cyan); }
+  .card.skip { opacity: .45; cursor: not-allowed; }
+  .card .shot { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: rgba(139,92,246,.08); }
+  .card .meta {
+    position: absolute; inset: auto 0 0 0; padding: 8px 10px;
+    background: linear-gradient(transparent, rgba(6,4,16,.92) 45%);
+    font-size: 12px; display: flex; justify-content: space-between; gap: 8px; align-items: flex-end;
+  }
+  .card .meta b { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .meta span { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); white-space: nowrap; }
+  .card .tick {
+    position: absolute; top: 9px; left: 9px; width: 21px; height: 21px; border-radius: 6px;
+    background: rgba(6,4,16,.72); border: 1px solid rgba(233,230,255,.4);
+    display: grid; place-items: center; font-size: 13px; color: transparent;
+  }
+  .card.picked .tick { background: var(--cyan); border-color: var(--cyan); color: #06121a; }
+  .card .badge {
+    position: absolute; top: 9px; right: 9px; padding: 2px 7px; border-radius: 99px;
+    background: rgba(6,4,16,.72); font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--ink-dim);
+  }
+  /* Sits above the picture, but clear of the play button in the middle — a skipped
+     item is still worth looking at, which is often how you learn why it is skipped. */
+  .card .why { position: absolute; inset: 0; display: grid; place-items: center; align-items: end;
+    padding: 12px 12px 40px; text-align: center;
+    font-size: 12px; color: var(--amber); background: rgba(6,4,16,.55); }
+
+  /* Preview button. Always present for keyboard and touch; fades in on hover. */
+  .card .play {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: 46px; height: 46px; padding: 0; border-radius: 50%;
+    background: rgba(6,4,16,.62); border: 1px solid rgba(233,230,255,.45);
+    color: var(--ink); font-size: 16px; line-height: 1;
+    display: grid; place-items: center; opacity: .5;
+    transition: opacity .15s ease, background .15s ease, transform .12s ease;
+    backdrop-filter: blur(3px);
+  }
+  .card:hover .play, .card .play:focus-visible { opacity: 1; }
+  .card .play:hover { background: var(--cyan); color: #06121a; border-color: var(--cyan); }
+  /* The card is not tickable, but the preview button on it still is. */
+  .card.skip .play { cursor: pointer; }
+  @media (hover: none) { .card .play { opacity: .9; } }
+
+  .peek {
+    background: transparent; border: 0; padding: 0 6px; color: var(--ink-faint);
+    font-size: 13px; cursor: pointer;
+  }
+  .peek:hover { color: var(--cyan); }
+
+  /* ---- preview viewer ---- */
+  .viewer { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 3vh 3vw; }
+  .viewer .backdrop { position: absolute; inset: 0; background: rgba(4,2,12,.86); backdrop-filter: blur(6px); }
+  .viewer .box {
+    position: relative; z-index: 1; width: min(1100px, 94vw); max-height: 94vh;
+    display: flex; flex-direction: column; gap: 12px;
+    background: rgba(18,13,42,.86); border: 1px solid var(--panel-edge);
+    border-radius: 16px; padding: 16px 18px;
+    box-shadow: 0 30px 80px -30px #000;
+  }
+  .viewer .head { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+  .viewer .head .who { min-width: 0; }
+  .viewer .head b { display: block; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .viewer .head .sub { font-size: 12px; color: var(--ink-faint); font-family: var(--mono); }
+  .viewer .stage {
+    flex: 1; min-height: 240px; display: grid; place-items: center;
+    background: #05030f; border-radius: 12px; overflow: hidden;
+  }
+  /* Proxies are small (720p at most), so fill the stage rather than leaving a
+     postage stamp in a black field. Aspect ratio is preserved either way. */
+  .viewer .stage video, .viewer .stage img {
+    display: block; width: 100%; height: auto; max-height: 68vh; object-fit: contain;
+  }
+  .viewer .stage .placeholder { color: var(--ink-faint); font-size: 13px; padding: 40px; text-align: center; }
+  .viewer .foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .viewer .foot .hint { font-size: 12px; color: var(--ink-faint); }
+  button.pick-on { background: linear-gradient(100deg, #0e7490, var(--cyan)); color: #06121a; border: 0; }
+
+  .segmented { display: inline-flex; border: 1px solid var(--panel-edge); border-radius: 9px; overflow: hidden; }
+  .segmented button { background: transparent; border: 0; border-radius: 0; padding: 8px 14px; color: var(--ink-faint); font-size: 13px; }
+  .segmented button.on { background: rgba(139,92,246,.28); color: var(--ink); }
+
   .hidden { display: none !important; }
   a { color: var(--cyan); }
 </style>
@@ -190,12 +279,16 @@
         <div class="stat"><div class="k">Skipped</div><div class="v" id="s-skip">–</div></div>
       </div>
       <div class="row" style="margin-bottom:12px; gap:10px; align-items:center">
+        <span class="segmented">
+          <button id="view-grid" class="on">Grid</button><button id="view-list">List</button>
+        </span>
         <button class="ghost" id="sel-all">Select all</button>
         <button class="ghost" id="sel-none">Select none</button>
         <button class="ghost" id="sel-invert">Invert</button>
         <span class="muted" id="sel-count" style="font-size:13px"></span>
       </div>
-      <div class="scroll"><table>
+      <div class="scroll" id="grid-wrap" style="max-height:620px; padding:2px"><div class="grid" id="lib-grid"></div></div>
+      <div class="scroll hidden" id="list-wrap"><table>
         <thead><tr>
           <th style="width:34px"><input type="checkbox" id="sel-head" style="min-width:auto"></th>
           <th>Captured</th><th>File</th><th>Type</th><th class="num">Size</th><th>Note</th>
@@ -246,6 +339,24 @@
     <div class="bar" style="margin-bottom:18px"><i id="r-bar" style="width:0%"></i></div>
     <div class="flight" id="r-flight"></div>
     <pre class="log" id="r-log" style="margin-top:16px"></pre>
+  </div>
+</div>
+<div class="viewer hidden" id="viewer" role="dialog" aria-modal="true" aria-label="Media preview">
+  <div class="backdrop" data-close></div>
+  <div class="box">
+    <div class="head">
+      <div class="who"><b id="v-name">—</b><span class="sub" id="v-meta"></span></div>
+      <div class="row" style="gap:8px; flex-wrap:nowrap">
+        <button class="ghost" id="v-pick">Select</button>
+        <button class="ghost" id="v-close" aria-label="Close preview" data-close>✕</button>
+      </div>
+    </div>
+    <div class="stage" id="v-stage"></div>
+    <div class="foot">
+      <button class="ghost" id="v-prev">← Previous</button>
+      <span class="hint"><span id="v-note"></span> <span id="v-pos"></span></span>
+      <button class="ghost" id="v-next">Next →</button>
+    </div>
   </div>
 </div>
 <script type="module" src="./app.js"></script>
